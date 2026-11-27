@@ -38,13 +38,25 @@
     <p class="eyebrow" id="sum-label">今月の支出</p>
     <p class="big-amount"><span class="yen">¥</span><span id="sum-total">0</span></p>
     <p class="sub" id="sum-sub">まだ記録がありません</p>
-    <div class="catbar" id="catbar" role="img" aria-label="カテゴリ別の割合"></div>
-    <ul class="catlist" id="catlist"></ul>
+    <div class="seg" role="tablist" aria-label="内訳の切り替え">
+      <button type="button" role="tab" id="tab-cat" aria-selected="true" aria-controls="catlist">カテゴリ別</button>
+      <button type="button" role="tab" id="tab-pay" aria-selected="false" aria-controls="paylist">支払方法別</button>
+    </div>
+    <div class="catbar" id="catbar" role="img" aria-label="内訳の割合"></div>
+    <ul class="catlist" id="catlist" role="tabpanel" aria-labelledby="tab-cat"></ul>
+    <ul class="paylist" id="paylist" role="tabpanel" aria-labelledby="tab-pay" hidden></ul>
+    <p class="breakdown-note" id="breakdown-note"></p>
   </section>
 
   <section class="history" aria-labelledby="hist-label">
     <h2 id="hist-label">履歴</h2>
+    <div class="filter-bar" id="filter-bar" hidden>
+      <span class="filter-dot" id="filter-dot"></span>
+      <p class="filter-text"><b id="filter-name"></b><span id="filter-sum"></span></p>
+      <button type="button" class="link-btn" id="filter-clear">解除</button>
+    </div>
     <div id="history"></div>
+    <p class="empty-filter" id="empty-filter" hidden>この月は該当する記録がありません</p>
     <div class="empty" id="empty" hidden>
       <svg class="empty-art" viewBox="0 0 120 140" aria-hidden="true">
         <path class="paper" d="M20 8h80v118l-8-6-8 6-8-6-8 6-8-6-8 6-8-6-8 6-8-6-8 6z"/>
@@ -105,6 +117,7 @@
       <div class="tape-head">
         <span class="tape-store" id="tape-store">店名を探しています</span>
         <span class="tape-date" id="tape-date"></span>
+        <span class="tape-pay" id="tape-pay" hidden></span>
       </div>
       <ol class="tape-items" id="tape-items"></ol>
       <div class="tape-sum">
@@ -135,18 +148,19 @@
         <span>店名</span>
         <input id="f-store" type="text" autocomplete="off" placeholder="例: スーパーみどり 中央店">
       </label>
-      <div class="field-row">
-        <label class="field">
-          <span>日付</span>
-          <input id="f-date" type="date" required>
+      <label class="field">
+        <span>日付</span>
+        <input id="f-date" type="date" required>
+      </label>
+      <fieldset class="field pay-field" id="f-pay-field">
+        <legend>支払方法</legend>
+        <p class="pay-hint" id="f-pay-hint" hidden></p>
+        <div class="pay-chips" id="f-pay"></div>
+        <label class="check-row learn" id="f-learn-row" hidden>
+          <input type="checkbox" id="f-learn" checked>
+          <span id="f-learn-text"></span>
         </label>
-        <label class="field">
-          <span>支払い</span>
-          <select id="f-pay">
-            <option>現金</option><option>クレジット</option><option>電子マネー</option><option>QR決済</option><option>その他</option>
-          </select>
-        </label>
-      </div>
+      </fieldset>
       <fieldset class="field cats" id="f-cats">
         <legend>カテゴリ</legend>
       </fieldset>
@@ -192,6 +206,11 @@
     </header>
     <div class="sheet-body settings-body">
       <section>
+        <h3>支払方法</h3>
+        <p class="note" id="methods-summary">現金のほか、クレジットカード・電子マネー・QR決済などを登録しておくと、記録のときに選べます。</p>
+        <button class="btn ghost" type="button" id="open-methods">支払方法を登録・編集</button>
+      </section>
+      <section>
         <h3>データの書き出し</h3>
         <p class="note">記録はこの端末のブラウザ内だけに保存されています。機種変更の前にバックアップを書き出してください。</p>
         <div class="btn-row">
@@ -228,6 +247,79 @@
       <p class="credit">文字認識: Tesseract.js (Apache-2.0)。画像は端末の外に送信されません。</p>
     </div>
   </div>
+</dialog>
+
+<!-- 支払方法の一覧 -->
+<dialog class="sheet" id="methods" aria-labelledby="methods-title">
+  <div class="sheet-inner">
+    <header class="sheet-head">
+      <h2 id="methods-title">支払方法</h2>
+      <button class="icon-btn" type="button" data-close aria-label="閉じる">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="sheet-body">
+      <p class="note">記録のときに選ぶ支払方法です。上にあるものほど選択肢の前に並びます。カードは下4桁を登録しておくと、レシートのカード番号から自動で選ばれます。</p>
+      <ul class="method-list" id="methods-list"></ul>
+      <button class="btn primary" type="button" id="add-method">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        支払方法を追加
+      </button>
+    </div>
+  </div>
+</dialog>
+
+<!-- 支払方法の追加・編集 -->
+<dialog class="sheet" id="method-editor" aria-labelledby="method-editor-title">
+  <form id="method-form" method="dialog" novalidate>
+    <header class="sheet-head">
+      <h2 id="method-editor-title">支払方法を追加</h2>
+      <button class="icon-btn" type="button" data-close aria-label="閉じる">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="sheet-body">
+      <fieldset class="field">
+        <legend>種類</legend>
+        <div class="type-chips" id="m-types"></div>
+      </fieldset>
+      <label class="field">
+        <span>名前</span>
+        <input id="m-name" type="text" autocomplete="off" maxlength="30" required>
+      </label>
+      <div class="suggest-row" id="m-suggest" hidden></div>
+      <div class="field-row" id="m-card-fields" hidden>
+        <label class="field">
+          <span>ブランド</span>
+          <select id="m-brand">
+            <option value="">未選択</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>カード番号の下4桁</span>
+          <input id="m-last4" type="text" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="任意">
+        </label>
+      </div>
+      <fieldset class="field">
+        <legend>色</legend>
+        <div class="swatches" id="m-colors"></div>
+      </fieldset>
+      <label class="check-row" id="m-archive-row" hidden>
+        <input type="checkbox" id="m-archived">
+        <span>選択肢に表示しない(解約したカードなど。過去の記録はそのまま残ります)</span>
+      </label>
+      <p class="note" id="m-delete-note" hidden></p>
+    </div>
+    <footer class="sheet-foot">
+      <button class="btn danger-ghost" type="button" id="m-delete" hidden>削除</button>
+      <button class="btn primary" type="submit">保存する</button>
+    </footer>
+    <div class="confirm-bar" id="m-confirm-del" hidden>
+      <p>この支払方法を削除しますか?</p>
+      <button class="btn ghost" type="button" id="m-del-cancel">やめる</button>
+      <button class="btn danger" type="button" id="m-del-ok">削除する</button>
+    </div>
+  </form>
 </dialog>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>

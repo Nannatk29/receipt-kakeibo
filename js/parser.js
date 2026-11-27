@@ -51,17 +51,68 @@ const KW = {
   taxIn: /(内税|内消費税|消費税等|消費税額|税額)/,
   taxBase: /(対象|課税|非課税|税率)/,
   deposit: /(お?預り|お?預かり|預り金|お?釣り?|釣銭|おつり|釣り銭)/,
-  payment: /(現金|クレジット|ｸﾚｼﾞｯﾄ|カード|電子マネー|PayPay|楽天ペイ|d払い|au ?PAY|メルペイ|Suica|PASMO|ICOCA|nanaco|WAON|楽天Edy|Edy|iD|QUICPay|交通系|コード決済|バーコード決済|お支払|支払|残高|利用額)/i,
+  payment: /(現金|クレジット|ｸﾚｼﾞｯﾄ|カード|デビット|電子マネー|PayPay|PAYPAY|楽天ペイ|d払い|au ?PAY|メルペイ|Suica|SUICA|PASMO|ICOCA|nanaco|WAON|楽天Edy|Edy|QUICPay|交通系|コード決済|バーコード決済|お支払|支払|残高|利用額|VISA|JCB|AMEX)/,
   discount: /(値引|値引き|割引|割り引|クーポン|OFF|オフ|引$)/i,
   meta: /(TEL|Tel|電話|FAX|領収|レシート|No[.:]|NO[.:]|登録番号|担当|レジ|責任者|点数|\d+点$|営業時間|ありがとう|お越し|お問い?合わせ|〒|http|www|伝票|取引|承認|会員|ポイント|pt|P残高|発行|再発行|お客様|お得|店舗|返品|交換|保管|控え)/i,
 };
 
-const PAYMENT_LABELS = [
-  [/(PayPay|楽天ペイ|d払い|au ?PAY|メルペイ|コード決済|バーコード決済)/i, 'QR決済'],
-  [/(Suica|PASMO|ICOCA|nanaco|WAON|Edy|iD|QUICPay|交通系|電子マネー)/i, '電子マネー'],
-  [/(クレジット|ｸﾚｼﾞｯﾄ|カード|VISA|Master|JCB|AMEX)/i, 'クレジット'],
-  [/(現金|お?預り|お?預かり|お?釣り?|おつり)/, '現金'],
+// 支払方法の手がかり。英字は大文字小文字を区別する(「id」などの誤検出を避けるため)
+const PAY_SERVICES = [
+  [/PayPay|PAYPAY|ペイペイ/, 'PayPay', 'qr'],
+  [/楽天ペイ/, '楽天ペイ', 'qr'],
+  [/d払い/, 'd払い', 'qr'],
+  [/au ?PAY|au ?Pay/, 'au PAY', 'qr'],
+  [/メルペイ/, 'メルペイ', 'qr'],
+  [/LINE ?Pay/, 'LINE Pay', 'qr'],
+  [/Suica|SUICA|スイカ/, 'Suica', 'emoney'],
+  [/PASMO|パスモ/, 'PASMO', 'emoney'],
+  [/ICOCA|イコカ/, 'ICOCA', 'emoney'],
+  [/Kitaca|TOICA|manaca|nimoca|SUGOCA|はやかけん/, null, 'emoney'],
+  [/QUICPay|QUICPAY|クイックペイ/, 'QUICPay', 'emoney'],
+  [/(?:^|[^A-Za-z])iD(?:[^A-Za-z]|$)/, 'iD', 'emoney'],
+  [/nanaco|ナナコ/, 'nanaco', 'emoney'],
+  [/WAON|ワオン/, 'WAON', 'emoney'],
+  [/楽天 ?Edy|Edy|エディ/, '楽天Edy', 'emoney'],
 ];
+const PAY_BRANDS = [
+  [/VISA|Visa/, 'VISA'],
+  [/Master ?[Cc]ard|MASTER|Master/, 'Mastercard'],
+  [/JCB/, 'JCB'],
+  [/AMEX|American ?Express|AMERICAN ?EXPRESS/, 'American Express'],
+  [/Diners|DINERS/, 'Diners Club'],
+];
+const PAY_TYPES = [
+  [/デビット|DEBIT|Debit/, 'debit'],
+  [/クレジット|ｸﾚｼﾞｯﾄ|クレカ|CREDIT|Credit|カード払|カード支払|カードご利用|カード利用/, 'credit'],
+  [/コード決済|バーコード決済|QR決済|スマホ決済/, 'qr'],
+  [/電子マネー|交通系/, 'emoney'],
+  [/現金|お?預り|お?預かり|お?釣り?|おつり|釣銭/, 'cash'],
+];
+const PAY_TYPE_LABEL = { cash: '現金', credit: 'クレジット', debit: 'デビット', emoney: '電子マネー', qr: 'QR決済' };
+
+/**
+ * 1行から支払方法の手がかりを取り出す。
+ * @returns {{type?:string, service?:string, brand?:string, last4?:string}}
+ */
+export function detectPayment(raw) {
+  const s = (raw || '').normalize('NFKC');
+  const hint = {};
+  for (const [re, name, type] of PAY_SERVICES) {
+    const m = s.match(re);
+    if (m) { hint.service = name || m[0]; hint.type = type; break; }
+  }
+  for (const [re, brand] of PAY_BRANDS) if (re.test(s)) { hint.brand = brand; break; }
+  if (!hint.type) for (const [re, type] of PAY_TYPES) if (re.test(s)) { hint.type = type; break; }
+  if (hint.brand && !hint.type) hint.type = 'credit';
+  // 伏せ字のカード番号「************1234」「XXXX-XXXX-XXXX-1234」の下4桁(ポイントカードの番号は除く)
+  if (!/(ポイント|会員|Ponta|Tカード|nanaco番号)/.test(s)) {
+    // OCR は伏せ字の「*」を「ネ」「米」などと読むことがある
+    const compact = s.replace(/[\s-]/g, '');
+    const m = compact.match(/[*xX•●※#ネ米+・]{4,}(\d{4})(?!\d)/) || compact.match(/カード(?:番号|No\.?|NO\.?)\D*?(\d{4})$/);
+    if (m) hint.last4 = m[1];
+  }
+  return hint;
+}
 
 // 末尾の金額: 「¥1,280」「1280円」「398※」「-50」「▲50」など
 const RE_PRICE_TAIL = /(?:^|[\s:])([-▲△]?)\s*(¥?)\s*((?:\d{1,3}(?:[,.]\d{3})+)|\d{1,6})\s*(円)?\s*([※*軽外内非税TEXRJ8%]{0,3})\s*\)?\s*$/;
@@ -162,10 +213,6 @@ export function findDate(text, today = new Date()) {
   return null;
 }
 
-function paymentOf(text) {
-  for (const [re, label] of PAYMENT_LABELS) if (re.test(text)) return label;
-  return null;
-}
 
 /**
  * 1フレーム分の OCR 行を解析する。
@@ -174,7 +221,7 @@ function paymentOf(text) {
 export function parseFrame(lines, today = new Date()) {
   const out = {
     items: [], total: null, subtotal: null, taxOut: null, taxIn: null,
-    date: null, store: [], payment: null, lineKinds: [],
+    date: null, store: [], payment: null, payHint: {}, lineKinds: [],
   };
   let pendingName = null; // 価格の無い商品名(次の数量行で確定するもの)
   let seenItem = false;
@@ -191,6 +238,11 @@ export function parseFrame(lines, today = new Date()) {
     // 列の空白を残した版(NFKC と ¥ の補正だけ行う)
     const spaced = (ln.text || '').normalize('NFKC').replace(/[\\￥]/g, '¥').trim();
 
+    // 支払方法の手がかり(現金より具体的な支払方法を優先する)
+    const ph = detectPayment(ln.text);
+    if (ph.type && (!out.payHint.type || out.payHint.type === 'cash')) out.payHint.type = ph.type;
+    for (const k of ['service', 'brand', 'last4']) if (ph[k] && !out.payHint[k]) out.payHint[k] = ph[k];
+
     if (anchorLine < 0 && /(TEL|Tel|電話|〒|都|道|府|県|市|区|町)/.test(text) && /\d/.test(text)) anchorLine = idx;
     const date = findDate(text, today);
     if (date && anchorLine < 0) anchorLine = idx;
@@ -201,7 +253,6 @@ export function parseFrame(lines, today = new Date()) {
 
     const price = parsePriceTail(text, spaced);
     const head = price ? price.head : text;
-    const pay = paymentOf(text);
 
     // 「小計」「合計」の読み違い(「人計」など)も金額の集計行として扱う
     if (KW.subtotal.test(head) || (/^.{0,2}計$/.test(cleanName(head)) && !KW.total.test(head))) {
@@ -224,11 +275,9 @@ export function parseFrame(lines, today = new Date()) {
       if (price && KW.taxIn.test(head)) out.taxIn = price.value;
       kind.kind = 'tax'; pendingName = null; return;
     }
-    if (KW.deposit.test(head) || (KW.payment.test(head) && price)) {
-      if (pay) out.payment = out.payment || pay;
+    if (KW.deposit.test(head) || ((KW.payment.test(head) || ph.type) && price)) {
       kind.kind = 'payment'; pendingName = null; return;
     }
-    if (pay && !price) out.payment = out.payment || pay;
     if (KW.meta.test(head) && !RE_QTY.test(head)) { kind.kind = 'meta'; return; }
     // 「(8%対象 ¥1,214)」のような括弧書きは税の内訳
     if (/^[(\[]/.test(head) || /\)\s*$/.test(text)) { kind.kind = 'tax'; pendingName = null; return; }
@@ -280,6 +329,7 @@ export function parseFrame(lines, today = new Date()) {
     }
   });
   if (anchorLine >= 0) out.store = storeCands.filter((c) => c.order < anchorLine).slice(0, 2);
+  out.payment = PAY_TYPE_LABEL[out.payHint.type] || null;
   return out;
 }
 
@@ -296,6 +346,7 @@ export class ReceiptAccumulator {
     this.dates = new Map();
     this.stores = [];
     this.payments = new Map();
+    this.payHints = { type: new Map(), service: new Map(), brand: new Map(), last4: new Map() };
     this.seq = 0;
   }
 
@@ -314,6 +365,7 @@ export class ReceiptAccumulator {
     if (parsed.taxOut != null) ReceiptAccumulator.vote(this.taxOut, parsed.taxOut, 1);
     if (parsed.date) ReceiptAccumulator.vote(this.dates, parsed.date.value, w(parsed.date.conf));
     if (parsed.payment) ReceiptAccumulator.vote(this.payments, parsed.payment, 1);
+    for (const k of Object.keys(this.payHints)) if (parsed.payHint?.[k]) ReceiptAccumulator.vote(this.payHints[k], parsed.payHint[k], 1);
     for (const s of parsed.store) this._addStore(s);
 
     // 1) 既存の品目と対応付ける(同じフレーム内で同じ品目に二重には対応させない)
@@ -398,6 +450,20 @@ export class ReceiptAccumulator {
     this.stores.push({ name: s.name, conf: s.conf, score: 1 + (s.strong ? 1 : 0) + (s.order === 0 ? 0.5 : 0) });
   }
 
+  _paymentHint() {
+    const types = this.payHints.type;
+    // 現金以外の手がかりが一度でも見えたら、そちらを優先する
+    const nonCash = new Map([...types].filter(([k]) => k !== 'cash'));
+    const hint = {
+      type: ReceiptAccumulator.best(nonCash.size ? nonCash : types),
+      service: ReceiptAccumulator.best(this.payHints.service),
+      brand: ReceiptAccumulator.best(this.payHints.brand),
+      last4: ReceiptAccumulator.best(this.payHints.last4),
+    };
+    for (const k of Object.keys(hint)) if (hint[k] == null) delete hint[k];
+    return hint;
+  }
+
   /** 現時点のレシート内容 */
   snapshot() {
     const list = [...this.items].sort((a, b) => a.order - b.order).map((ex) => ({
@@ -433,6 +499,7 @@ export class ReceiptAccumulator {
       date: ReceiptAccumulator.best(this.dates),
       store: store ? store.name : '',
       payment: ReceiptAccumulator.best(this.payments),
+      paymentHint: this._paymentHint(),
     };
   }
 }

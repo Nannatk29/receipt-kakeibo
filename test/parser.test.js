@@ -82,3 +82,76 @@ test('店名からカテゴリを推定', () => {
   assert.equal(guessCategory('ドラッグストア ハナ'), '日用品');
   assert.equal(guessCategory('スーパーみどり'), '食費');
 });
+
+// ---- 支払方法 ---------------------------------------------------------
+import { detectPayment } from '../js/parser.js';
+import { matchMethod, migrateRecords, summarizeByMethod, defaultMethods } from '../js/payments.js';
+
+test('レシートの行から支払方法の手がかりを読む', () => {
+  assert.deepEqual(detectPayment('クレジット VISA'), { brand: 'VISA', type: 'credit' });
+  assert.deepEqual(detectPayment('カード番号 ****-****-****-1234'), { last4: '1234' });
+  assert.deepEqual(detectPayment('PayPay支払  ¥842'), { service: 'PayPay', type: 'qr' });
+  assert.deepEqual(detectPayment('モバイルSuica ¥230'), { service: 'Suica', type: 'emoney' });
+  assert.deepEqual(detectPayment('デビット VISA'), { brand: 'VISA', type: 'debit' });
+  assert.deepEqual(detectPayment('カード番号 ネネネネネネネネネネネネ*1234'), { last4: '1234' }); // 伏せ字の誤読
+  assert.deepEqual(detectPayment('カード番号 ??-??-5678'), { last4: '5678' });
+  // 誤検出しないもの
+  assert.deepEqual(detectPayment('Liquid soap  ¥398'), {});
+  assert.deepEqual(detectPayment('ポイントカード提示'), {});
+  assert.deepEqual(detectPayment('会員番号 ********9999'), {});
+});
+
+test('複数フレームでは現金より具体的な支払方法を優先する', () => {
+  const acc = new ReceiptAccumulator();
+  acc.addFrame(parseFrame([L('おにぎり   ¥160'), L('合計   ¥160'), L('お預り ¥0')], today));
+  acc.addFrame(parseFrame([L('合計   ¥160'), L('クレジット   ¥160'), L('VISA'), L('XXXXXXXXXXXX1234')], today));
+  assert.deepEqual(acc.snapshot().paymentHint, { type: 'credit', brand: 'VISA', last4: '1234' });
+});
+
+const M = [
+  { id: 'cash', name: '現金', type: 'cash' },
+  { id: 'raku', name: '楽天カード', type: 'credit', brand: 'VISA', last4: '1234' },
+  { id: 'aeon', name: 'イオンカード', type: 'credit', brand: 'Mastercard' },
+  { id: 'old', name: '昔のカード', type: 'credit', brand: 'JCB', archived: true },
+  { id: 'pay', name: 'PayPay', type: 'qr' },
+  { id: 'sui', name: 'モバイルSuica', type: 'emoney' },
+];
+
+test('下4桁・サービス名・ブランドで登録済みの支払方法を選ぶ', () => {
+  assert.equal(matchMethod({ type: 'credit', last4: '1234' }, M).id, 'raku');
+  assert.equal(matchMethod({ type: 'qr', service: 'PayPay' }, M).id, 'pay');
+  assert.equal(matchMethod({ type: 'emoney', service: 'Suica' }, M).id, 'sui');
+  assert.equal(matchMethod({ type: 'credit', brand: 'Mastercard' }, M).id, 'aeon');
+  assert.equal(matchMethod({ type: 'cash' }, M).id, 'cash');
+});
+
+test('決めきれないときは候補を返し、未登録なら missing を返す', () => {
+  const r = matchMethod({ type: 'credit' }, M);
+  assert.equal(r.id, undefined);
+  assert.deepEqual(r.candidates, ['raku', 'aeon']); // 非表示のカードは候補に入れない
+  assert.equal(matchMethod({ type: 'credit', brand: 'JCB' }, M).candidates.length, 2);
+  assert.equal(matchMethod({ type: 'debit' }, M).missing, true);
+  assert.equal(matchMethod({}, M), null);
+  // 下4桁だけ(種類が分からない)ではカード払いと決めつけない
+  assert.equal(matchMethod({ last4: '9999' }, M), null);
+});
+
+test('以前の版の記録を支払方法に結び付ける', () => {
+  const methods = defaultMethods();
+  const records = [{ payment: '現金' }, { payment: 'クレジット' }, { payment: 'クレジット' }, { payment: 'QR決済' }, {}];
+  let n = 0;
+  assert.equal(migrateRecords(records, methods, () => `m${++n}`), true);
+  assert.deepEqual(methods.map((m) => [m.name, m.type]), [['現金', 'cash'], ['クレジットカード', 'credit'], ['QR決済', 'qr']]);
+  assert.deepEqual(records.map((r) => r.paymentId), ['pm_cash', 'm1', 'm1', 'm2', 'pm_cash']);
+  assert.equal(migrateRecords(records, methods, () => 'x'), false);
+});
+
+test('支払方法別の集計は種類ごとにまとめる', () => {
+  const recs = [
+    { paymentId: 'raku', total: 3000 }, { paymentId: 'aeon', total: 1000 }, { paymentId: 'raku', total: 500 },
+    { paymentId: 'cash', total: 1200 }, { paymentId: 'pay', total: 800 },
+  ];
+  const g = summarizeByMethod(recs, M);
+  assert.deepEqual(g.map((x) => [x.type, x.total, x.count]), [['credit', 4500, 3], ['cash', 1200, 1], ['qr', 800, 1]]);
+  assert.deepEqual(g[0].methods.map((x) => [x.method.id, x.total]), [['raku', 3500], ['aeon', 1000]]);
+});

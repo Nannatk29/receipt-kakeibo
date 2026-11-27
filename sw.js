@@ -1,11 +1,11 @@
 // オフラインでも開けるようにするための Service Worker。
 // 画面の部品は先に保存し、文字認識の大きなファイルは初回に使ったときに保存する。
-const VERSION = 'v1.0.0';
+const VERSION = 'v1.1.0';
 const SHELL = `shell-${VERSION}`;
 const OCR = 'ocr-v7.0.0';
 const SHELL_FILES = [
   './', 'index.html', 'style.css', 'manifest.webmanifest',
-  'js/app.js', 'js/scanner.js', 'js/parser.js', 'js/preprocess.js',
+  'js/app.js', 'js/scanner.js', 'js/parser.js', 'js/preprocess.js', 'js/payments.js',
   'vendor/tesseract/tesseract.min.js', 'vendor/tesseract/worker.min.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
 ];
