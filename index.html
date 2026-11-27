@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>レシート家計簿</title>
+<meta name="description" content="レシートにカメラを向けるだけで、品目と金額をその場で読み取って記録する家計簿">
+<meta name="theme-color" content="#f3f5f2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121614" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="レシート家計簿">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="top-inner">
+    <button class="icon-btn" id="prev-month" type="button" aria-label="前の月">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+    </button>
+    <h1 class="month" id="month-label">2026年11月</h1>
+    <button class="icon-btn" id="next-month" type="button" aria-label="次の月">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+    </button>
+    <button class="icon-btn settings-btn" id="open-settings" type="button" aria-label="設定とデータ">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+  </div>
+</header>
+
+<main class="home" id="home">
+  <section class="summary" aria-labelledby="sum-label">
+    <p class="eyebrow" id="sum-label">今月の支出</p>
+    <p class="big-amount"><span class="yen">¥</span><span id="sum-total">0</span></p>
+    <p class="sub" id="sum-sub">まだ記録がありません</p>
+    <div class="catbar" id="catbar" role="img" aria-label="カテゴリ別の割合"></div>
+    <ul class="catlist" id="catlist"></ul>
+  </section>
+
+  <section class="history" aria-labelledby="hist-label">
+    <h2 id="hist-label">履歴</h2>
+    <div id="history"></div>
+    <div class="empty" id="empty" hidden>
+      <svg class="empty-art" viewBox="0 0 120 140" aria-hidden="true">
+        <path class="paper" d="M20 8h80v118l-8-6-8 6-8-6-8 6-8-6-8 6-8-6-8 6-8-6-8 6z"/>
+        <path class="rule" d="M34 34h52M34 50h36M34 62h44M34 74h30M34 96h52"/>
+        <path class="corner" d="M8 26V8h18M112 26V8H94M8 112v18h18M112 112v18H94"/>
+      </svg>
+      <p class="empty-title">この月の記録はまだありません</p>
+      <p class="empty-text">下の「レシートを読む」を押して、レシートにカメラを向けてください。品目と金額が読み取られていきます。</p>
+      <button class="link-btn" id="add-demo" type="button">お試しデータを入れてみる</button>
+    </div>
+  </section>
+</main>
+
+<nav class="dock" aria-label="記録する">
+  <div class="dock-inner">
+    <button class="btn ghost" id="manual-add" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      手入力
+    </button>
+    <button class="btn primary scan-cta" id="start-scan" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 9h10M7 12h7M7 15h10"/></svg>
+      レシートを読む
+    </button>
+  </div>
+</nav>
+
+<!-- ライブ読み取り画面 -->
+<section class="scan" id="scan" hidden aria-label="レシート読み取り">
+  <video id="video" playsinline muted autoplay></video>
+  <canvas class="overlay" id="overlay"></canvas>
+  <div class="guide" id="guide" aria-hidden="true"><i></i><i></i><i></i><i></i><div class="sweep"></div></div>
+
+  <div class="scan-top">
+    <button class="round-btn" id="close-scan" type="button" aria-label="読み取りをやめる">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <p class="status-pill" id="scan-status" role="status">カメラを準備しています</p>
+    <button class="round-btn" id="torch" type="button" aria-label="ライト" aria-pressed="false" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 2h6l-1 7h4l-8 13 2-9H8z"/></svg>
+    </button>
+  </div>
+  <p class="scan-hint" id="scan-hint">枠に入れて、上から下へゆっくり動かしてください</p>
+
+  <div class="loading" id="ocr-loading" hidden>
+    <p>文字認識エンジンを準備中…</p>
+    <div class="bar"><span id="ocr-progress"></span></div>
+    <p class="small">初回だけ約14MBを読み込みます。2回目からはすぐに始まります。</p>
+  </div>
+
+  <div class="scan-error" id="scan-error" hidden>
+    <p class="err-title">カメラを使えませんでした</p>
+    <p class="err-text" id="scan-error-text"></p>
+    <button class="btn primary" id="scan-error-close" type="button">戻る</button>
+  </div>
+
+  <div class="tape" id="tape">
+    <div class="tape-paper">
+      <div class="tape-head">
+        <span class="tape-store" id="tape-store">店名を探しています</span>
+        <span class="tape-date" id="tape-date"></span>
+      </div>
+      <ol class="tape-items" id="tape-items"></ol>
+      <div class="tape-sum">
+        <div class="sum-cell"><span>品目計</span><b id="tape-sum">¥0</b></div>
+        <div class="sum-cell"><span>レシート合計</span><b id="tape-total">—</b></div>
+        <div class="stamp" id="tape-stamp" hidden>合計<br>一致</div>
+      </div>
+    </div>
+    <div class="tape-actions">
+      <button class="btn ghost on-dark" id="scan-reset" type="button">やり直す</button>
+      <button class="btn primary" id="scan-done" type="button" disabled>この内容で確認</button>
+    </div>
+  </div>
+</section>
+
+<!-- 記録の確認・編集 -->
+<dialog class="sheet" id="editor" aria-labelledby="editor-title">
+  <form id="entry-form" method="dialog" novalidate>
+    <header class="sheet-head">
+      <h2 id="editor-title">レシートの確認</h2>
+      <button class="icon-btn" type="button" data-close aria-label="閉じる">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="sheet-body">
+      <div class="check" id="f-check" hidden></div>
+      <label class="field">
+        <span>店名</span>
+        <input id="f-store" type="text" autocomplete="off" placeholder="例: スーパーみどり 中央店">
+      </label>
+      <div class="field-row">
+        <label class="field">
+          <span>日付</span>
+          <input id="f-date" type="date" required>
+        </label>
+        <label class="field">
+          <span>支払い</span>
+          <select id="f-pay">
+            <option>現金</option><option>クレジット</option><option>電子マネー</option><option>QR決済</option><option>その他</option>
+          </select>
+        </label>
+      </div>
+      <fieldset class="field cats" id="f-cats">
+        <legend>カテゴリ</legend>
+      </fieldset>
+      <div class="items-head">
+        <span>品目</span>
+        <button class="link-btn" type="button" id="f-add-item">＋ 行を追加</button>
+      </div>
+      <ul class="items-edit" id="f-items"></ul>
+      <details class="candidates" id="f-cands" hidden>
+        <summary>読み取り候補 <span id="f-cands-n"></span>件 (1回しか見えなかった行)</summary>
+        <ul id="f-cands-list"></ul>
+      </details>
+      <div class="field total-field">
+        <label for="f-total">合計</label>
+        <div class="total-input"><span class="yen">¥</span><input id="f-total" type="text" inputmode="numeric" autocomplete="off"></div>
+        <p class="hint" id="f-total-hint"></p>
+      </div>
+      <label class="field">
+        <span>メモ</span>
+        <input id="f-memo" type="text" autocomplete="off" placeholder="任意">
+      </label>
+    </div>
+    <footer class="sheet-foot">
+      <button class="btn danger-ghost" type="button" id="f-delete" hidden>削除</button>
+      <button class="btn primary" type="submit" id="f-save">保存する</button>
+    </footer>
+    <div class="confirm-bar" id="f-confirm-del" hidden>
+      <p>この記録を削除しますか?</p>
+      <button class="btn ghost" type="button" id="f-del-cancel">やめる</button>
+      <button class="btn danger" type="button" id="f-del-ok">削除する</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 設定とデータ -->
+<dialog class="sheet" id="settings" aria-labelledby="settings-title">
+  <div class="sheet-inner">
+    <header class="sheet-head">
+      <h2 id="settings-title">設定とデータ</h2>
+      <button class="icon-btn" type="button" data-close aria-label="閉じる">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="sheet-body settings-body">
+      <section>
+        <h3>データの書き出し</h3>
+        <p class="note">記録はこの端末のブラウザ内だけに保存されています。機種変更の前にバックアップを書き出してください。</p>
+        <div class="btn-row">
+          <button class="btn ghost" type="button" id="export-csv">CSV を書き出す</button>
+          <button class="btn ghost" type="button" id="export-json">バックアップ (JSON)</button>
+        </div>
+        <label class="btn ghost file-btn">バックアップから復元<input type="file" id="import-json" accept="application/json,.json"></label>
+      </section>
+      <section>
+        <h3>読み取りのコツ</h3>
+        <ul class="tips">
+          <li>明るい場所で、レシートを平らな机に置くと精度が上がります。</li>
+          <li>枠の幅いっぱいにレシートが入る距離まで近づけてください。</li>
+          <li>長いレシートは上から下へゆっくり動かします。同じ行が何度か見えると確定(緑)になります。</li>
+          <li>「品目計」と「レシート合計」が一致すると判子が押されます。</li>
+        </ul>
+      </section>
+      <section>
+        <h3>ホーム画面に追加</h3>
+        <p class="note">iPhone は共有ボタン →「ホーム画面に追加」、Android はメニュー →「アプリをインストール」。アプリのように全画面で使え、オフラインでも動きます。</p>
+      </section>
+      <section>
+        <h3>データの削除</h3>
+        <div class="btn-row">
+          <button class="btn ghost" type="button" id="clear-demo">お試しデータを消す</button>
+          <button class="btn danger-ghost" type="button" id="clear-all">すべての記録を消す</button>
+        </div>
+        <div class="confirm-inline" id="clear-confirm" hidden>
+          <p>すべての記録を消します。元に戻せません。</p>
+          <button class="btn ghost" type="button" id="clear-cancel">やめる</button>
+          <button class="btn danger" type="button" id="clear-ok">消す</button>
+        </div>
+      </section>
+      <p class="credit">文字認識: Tesseract.js (Apache-2.0)。画像は端末の外に送信されません。</p>
+    </div>
+  </div>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="vendor/tesseract/tesseract.min.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

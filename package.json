@@ -1,0 +1,12 @@
+{
+  "name": "receipt-kakeibo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "カメラをレシートに向けるだけで品目と金額を読み取る家計簿 PWA",
+  "scripts": {
+    "start": "python3 -m http.server 8080",
+    "test": "node --test test/parser.test.js"
+  },
+  "license": "MIT"
+}
