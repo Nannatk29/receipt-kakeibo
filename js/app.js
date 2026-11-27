@@ -918,6 +918,41 @@ function bind() {
   });
 }
 
+// ---- タブの重複を防ぐ ------------------------------------------------------
+// ブラウザによっては、ホーム画面のショートカットから開くたびに新しいタブが増える。
+// このアプリを表示したタブが「いま表示中」と知らせ、裏に残っている古いタブは自分を閉じる。
+// (ショートカットから開いたタブは履歴が1件だけなので、ブラウザがスクリプトからの close を許す)
+const TAB_ID = uid();
+function hasUnsavedWork() {
+  return !$('scan').hidden || $('editor').open || $('method-editor').open;
+}
+function setupSingleTab() {
+  if (!('BroadcastChannel' in window)) return;
+  const ch = new BroadcastChannel('receipt-kakeibo-tabs');
+  const announce = () => { if (document.visibilityState === 'visible') ch.postMessage({ type: 'shown', id: TAB_ID }); };
+  ch.onmessage = (e) => {
+    if (!e.data || e.data.type !== 'shown' || e.data.id === TAB_ID) return;
+    // 自分が表示中、または入力途中なら閉じない
+    if (document.visibilityState === 'visible' || hasUnsavedWork()) return;
+    window.close();
+  };
+  document.addEventListener('visibilitychange', announce);
+  window.addEventListener('pageshow', announce);
+  document.addEventListener('resume', announce);
+  announce();
+}
+
+// 別のタブで保存した内容を、このタブの表示にも反映する
+window.addEventListener('storage', (e) => {
+  if (![STORAGE_KEY, METHODS_KEY, PREF_KEY].includes(e.key)) return;
+  store.load();
+  methods.load();
+  prefs.load();
+  if (filter && filter.kind === 'method' && !methods.get(filter.value)) filter = null;
+  render();
+  if ($('methods').open) renderMethodList();
+});
+
 // ---- 起動 -------------------------------------------------------------
 store.load();
 methods.load();
@@ -929,6 +964,7 @@ buildCategoryChips();
 buildMethodEditorStatic();
 bind();
 render();
+setupSingleTab();
 try { navigator.storage?.persist?.(); } catch { /* 非対応 */ }
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
