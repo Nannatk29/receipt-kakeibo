@@ -72,6 +72,48 @@ export function binarize(img, { windowRatio = 1 / 12, t = 0.16 } = {}) {
 }
 
 /**
+ * 列ごとの明るさから、紙(レシート)の左右の端を探す。
+ * 紙の外側(机など)は OCR がゴミ文字として読むので、塗りつぶすために使う。
+ * 紙が画像の幅いっぱいのとき、または判断できないときは null。
+ */
+export function paperBounds(gray, w, h) {
+  // 列ごとに「明るい側(上位 20%)」の明るさを求める。文字の多い列でも紙の白が残り、机は暗いまま
+  const step = Math.max(1, Math.floor(h / 160));
+  const rows = Math.ceil(h / step);
+  const col = new Float64Array(w);
+  const vals = new Uint8Array(rows);
+  for (let x = 0; x < w; x++) {
+    let n = 0;
+    for (let y = 0; y < h; y += step) vals[n++] = gray[y * w + x];
+    const sorted = vals.subarray(0, n).sort();
+    col[x] = sorted[Math.floor(n * 0.8)];
+  }
+  const k = Math.max(3, Math.round(w / 150));
+  const sm = new Float64Array(w);
+  for (let x = 0; x < w; x++) {
+    let sum = 0, n = 0;
+    for (let i = Math.max(0, x - k); i <= Math.min(w - 1, x + k); i++) { sum += col[i]; n++; }
+    sm[x] = sum / n;
+  }
+  let max = 0, min = 255;
+  for (const v of sm) { if (v > max) max = v; if (v < min) min = v; }
+  if (max - min < 35) return null;
+  const t = min + (max - min) * 0.5;
+  let best = null, start = -1;
+  for (let x = 0; x <= w; x++) {
+    const bright = x < w && sm[x] > t;
+    if (bright && start < 0) start = x;
+    if (!bright && start >= 0) {
+      if (!best || x - start > best.x1 - best.x0) best = { x0: start, x1: x - 1 };
+      start = -1;
+    }
+  }
+  if (!best || best.x1 - best.x0 < w * 0.4) return null;
+  if (best.x0 <= 1 && best.x1 >= w - 2) return null;
+  return best;
+}
+
+/**
  * 照明ムラを割り算で取り除き、階調は残したままコントラストを上げる。
  * 二値化より文字の輪郭が残るので、小さい文字では LSTM の認識が安定しやすい。
  */
@@ -91,6 +133,10 @@ export function flatten(img, { windowRatio = 1 / 10, gain = 1.15 } = {}) {
   let acc = 0, paper = 255;
   for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= gray.length * 0.1) { paper = v; break; } }
   const bgLevel = paper * 0.55;
+  // 紙の左右の外側は白で塗る(紙の縁を「|」や漢字として読むのを防ぐ)。縁そのものも少し内側まで消す
+  const pb = paperBounds(gray, w, h);
+  const padIn = Math.max(2, Math.round(w * 0.004));
+  const left = pb ? pb.x0 + padIn : -1, right = pb ? pb.x1 - padIn : w;
   const s = Math.max(8, Math.round(w * windowRatio)) >> 1;
   const out = new Uint8ClampedArray(w * h * 4);
   for (let y = 0; y < h; y++) {
@@ -101,7 +147,7 @@ export function flatten(img, { windowRatio = 1 / 10, gain = 1.15 } = {}) {
       const mean = (integral[(y1 + 1) * (w + 1) + (x1 + 1)] - integral[y0 * (w + 1) + (x1 + 1)]
         - integral[(y1 + 1) * (w + 1) + x0] + integral[y0 * (w + 1) + x0]) / count;
       let v;
-      if (mean < bgLevel) v = 255;
+      if (x < left || x > right || mean < bgLevel) v = 255;
       else {
         const r = gray[y * w + x] / (mean + 1); // 紙=約1、文字<1
         v = 255 - (1 - r) * 255 * gain * 2.2;

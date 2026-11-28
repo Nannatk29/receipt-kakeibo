@@ -94,7 +94,7 @@ export function matchMethod(hint, methods) {
     const hit = (x) => {
       const n = norm(x.name);
       if (n.includes(key) || (n.length >= 3 && key.includes(n))) return true;
-      return (x.keywords || []).some((k) => { const nk = norm(k); return nk === key || similarity(nk, key) >= 0.7; });
+      return (x.keywords || []).some((k) => { const nk = norm(k); return nk === key || (key.length >= 4 && similarity(nk, key) > 0.6); });
     };
     const m = one(active.filter(hit));
     if (m) return { id: m.id, reason: `「${hint.service}」の表示` };

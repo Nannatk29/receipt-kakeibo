@@ -258,3 +258,66 @@ test('崩れた数量行(「3コメx単__ 767」)も数量行として扱い、�
   const r = parseFrame([L('シュミテクトやさしくホワイトニ'), L('3コメx単__ 767        ¥2,301'), L('キュレル 皮脂トラブルケ   ¥1,320')], today);
   assert.deepEqual(r.items.map((i) => [i.name, i.price]), [['シュミテクトやさしくホワイトニ', 2301], ['キュレル皮脂トラブルケ', 1320]]);
 });
+
+// ---- 2枚目の実レシート画面で見つかった問題 ----------------------------------
+import { stripEdgeJunk, pickReread } from '../js/parser.js';
+import { paperBounds } from '../js/preprocess.js';
+
+test('紙の縁を読んだゴミ文字(行頭の「|」、金額のあとの1文字)を取り除く', () => {
+  assert.equal(stripEdgeJunk('|      本日もご来店      |'), '本日もご来店');
+  assert.equal(stripEdgeJunk('※サッポロー番 みそ 5食 \\516 計'), '※サッポロー番 みそ 5食 \\516');
+  assert.equal(stripEdgeJunk('¥238※'), '¥238※'); // 軽減税率の印は残す
+  assert.equal(stripEdgeJunk('¥160 軽'), '¥160 軽');
+  assert.equal(stripEdgeJunk('シュミテクトやさしくホワイトニ  に'), 'シュミテクトやさしくホワイトニ');
+  assert.equal(stripEdgeJunk('サッポロ一番 みそ 5食'), 'サッポロ一番 みそ 5食');
+});
+
+test('行頭に「|」が付いた税の行や、括弧の読めない「内10%」の行を品目にしない', () => {
+  const r = parseFrame([L('| (内10%           \\311)'), L('内 8%                    \\38'), L('| (税合計          \\349)'), L('アイテム値引 15%     -\\198')], today);
+  assert.deepEqual(r.items.map((i) => i.price), [-198]);
+});
+
+test('崩れた金額: 「ケー.320」は千の位が欠けた疑い、「隊1,320」は ¥ の化けとして読む', () => {
+  const a = parseFrame([L('キュレル 上及脂トラブルケー.320 革')], today);
+  assert.deepEqual(a.items.map((i) => [i.name, i.price, i.lost]), [['キュレル上及脂トラブルケー', 320, true]]);
+  const b = parseFrame([L('キュレル 皮脂トラブルケ 隊1,320')], today);
+  assert.deepEqual(b.items.map((i) => [i.name, i.price]), [['キュレル皮脂トラブルケ', 1320]]);
+  const c = parseFrame([L('サッポロ一番 みそ 5食')], today);
+  assert.equal(c.items.length, 0); // 「5食」を金額にしない
+});
+
+test('千の位を補う候補が複数あるときは、税率ごとの対象額で決める', () => {
+  const f = [
+    L('※サッポロー番 みそ 5食  \\516'), L('シュミテクトやさしくホワイトニ'), L('3コx単767      \\2,301'),
+    L('キュレル 皮脂トラブルケ   320'), L('アイテム値引 15%     -\\198'),
+    L('(内10% 対象   \\3,423)'), L('(内 8% 対象       \\516)'), L('TS3カード      \\3,939'),
+  ];
+  const acc = new ReceiptAccumulator();
+  acc.addFrame(parseFrame(f, today));
+  acc.addFrame(parseFrame(f, today));
+  const s = acc.snapshot();
+  assert.equal(s.total, 3939);
+  assert.equal(s.match, true);
+  assert.equal(s.items.find((i) => i.name.startsWith('キュレル')).price, 1320);
+  assert.equal(s.items.find((i) => i.name.startsWith('サッポロ')).price, 516);
+});
+
+test('読み直しの結果は「合計」などを含む行だけ採用する', () => {
+  assert.equal(pickReread({ text: 'キュレル 上及脂トラブルケ 1,320', confidence: 40 }, [{ text: 'キ上ル導', confidence: 60 }]), null);
+  const p = pickReread({ text: 'i 導言寺      \\3う3.所3昌', confidence: 0 }, [{ text: '| 合計', confidence: 40 }, { text: '\\3.939  |', confidence: 50 }]);
+  assert.ok(p && /合計/.test(p.text) && /3.939/.test(p.text));
+  assert.equal(pickReread({ text: '合計 ¥1,000', confidence: 30 }, [{ text: '合計 ¥1,000', confidence: 80 }]), null); // 元から読めている
+});
+
+test('紙の左右の端を見つける(文字の多い列を紙の外と誤認しない)', () => {
+  const w = 200, h = 100, g = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const paper = x >= 30 && x < 170;
+    // 紙の中央付近は文字で暗い画素が多い
+    g[y * w + x] = !paper ? 90 : (x > 80 && x < 120 && y % 3 === 0) ? 40 : 225;
+  }
+  const b = paperBounds(g, w, h);
+  assert.ok(b && Math.abs(b.x0 - 30) <= 4 && Math.abs(b.x1 - 169) <= 4, JSON.stringify(b));
+  const full = new Uint8Array(w * h).fill(225);
+  assert.equal(paperBounds(full, w, h), null); // 紙が幅いっぱい
+});

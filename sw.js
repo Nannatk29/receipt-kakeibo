@@ -1,6 +1,6 @@
 // オフラインでも開けるようにするための Service Worker。
 // 画面の部品は先に保存し、文字認識の大きなファイルは初回に使ったときに保存する。
-const VERSION = 'v1.3.0';
+const VERSION = 'v1.4.0';
 const SHELL = `shell-${VERSION}`;
 const OCR = 'ocr-v7.0.0';
 const SHELL_FILES = [

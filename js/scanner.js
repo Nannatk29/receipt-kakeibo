@@ -1,6 +1,6 @@
 // カメラ映像を連続で OCR し、ReceiptAccumulator に流し込むスキャナ。
 import { flatten, toGray, sharpness } from './preprocess.js';
-import { parseFrame, ReceiptAccumulator } from './parser.js';
+import { parseFrame, ReceiptAccumulator, pickReread } from './parser.js';
 
 const abs = (p) => new URL(p, document.baseURI).href;
 
@@ -219,11 +219,10 @@ export class LiveScanner {
       this.sctx.drawImage(this.canvas, 0, y0, W, h, 0, 0, this.strip.width, h);
       try {
         const { data } = await worker.recognize(this.strip, {}, { blocks: true, text: false });
-        const parts = [];
-        let sum = 0, n = 0;
-        for (const b of data.blocks || []) for (const p of b.paragraphs) for (const x of p.lines) { parts.push(x.text.trim()); sum += x.confidence; n++; }
-        const conf = n ? sum / n : 0;
-        if (parts.length && conf > l.confidence) { l.text = parts.join('     '); l.confidence = conf; }
+        const rl = [];
+        for (const b of data.blocks || []) for (const p of b.paragraphs) for (const x of p.lines) rl.push({ text: x.text, confidence: x.confidence });
+        const pick = pickReread(l, rl);
+        if (pick) { l.text = pick.text; l.confidence = pick.confidence; }
       } catch { /* 読み直しに失敗したら元のまま */ }
     }
   }

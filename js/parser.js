@@ -6,9 +6,24 @@ const RE_CJK_SPACE = new RegExp(`([${CJK}])[\\s\\u3000]+(?=[${CJK}])`, 'g');
 const RE_HAS_JA = new RegExp(`[${CJK}]`);
 const RE_JA_ALL = new RegExp(`[${CJK}]`, 'g');
 
+/**
+ * 紙の縁や影を OCR が文字として読んだもの(行頭・行末の「|」「_」、金額のあとに離れて付いた1〜2文字など)を取り除く。
+ * 列の空白は残す。
+ */
+export function stripEdgeJunk(raw) {
+  let s = (raw || '').normalize('NFKC').replace(/\s+$/, '');
+  s = s.replace(/^\s*[|!_\[\]{}「」『』【】Il]+\s+/, '');
+  s = s.replace(/\s+[|!_\[\]{}「」『』【】]+$/, '');
+  // 金額や「)」のあとに離れて付いた1〜2文字(「¥516 計」「¥1,320 革」)。軽減税率などの印は残す
+  s = s.replace(/([\d)])\s+([^\s\d※*]{1,2})$/, (m, a, b) => (/^[軽外内非税TEXRJ%円]+$/.test(b) ? m : a));
+  // 金額のない行の末尾に大きく離れて付いた、ひらがな1文字や記号(「ホワイトニ  に」)
+  s = s.replace(/(\S)\s{2,}([\p{Script=Hiragana}|!_。、・])$/u, '$1');
+  return s;
+}
+
 /** OCR の1行を比較しやすい形に整える */
 export function normalizeLine(raw) {
-  let s = (raw || '').normalize('NFKC');
+  let s = stripEdgeJunk(raw);
   s = s.replace(/[‐-―−－]/g, '-'); // 各種ダッシュ
   s = s.replace(RE_CJK_SPACE, '$1').replace(RE_CJK_SPACE, '$1');
   // よくある誤認識: 「計」が「言十」に割れる、¥ が \ や Y になる
@@ -111,7 +126,8 @@ export function detectPayment(raw) {
     const m = t.match(/^(.{0,14}?カ[ガカ]?[ー一-]?ド)(?:払い?|支払い?)?\s*[¥\\]?\s*[\d,.\s]+$/);
     if (m && /\d/.test(t) && !/(ポイント|会員|Ponta|Tカード|スタンプ|メンバーズ|番号|No)/i.test(t)) {
       hint.type = hint.type || 'credit';
-      const nm = m[1].replace(/^[^\p{L}\p{N}]+/u, '').trim();
+      const tokens = m[1].split(/\s+/);
+      const nm = (tokens[tokens.length - 1] || '').replace(/^[^\p{L}\p{N}]+/u, '');
       if (nm.length >= 3) hint.service = nm;
     }
   }
@@ -173,8 +189,16 @@ function parsePriceTail(s, raw) {
   }
   const fixed = fixDigits(s);
   const m = fixed.match(RE_PRICE_TAIL);
-  if (!m) return null;
-  if (!m) return null;
+  if (!m) {
+    // 「…ケ 隊1,320」: ¥ が別の1文字に化けて数字にくっついた金額(単位の文字は除く)
+    // (漢字どうしの空白を詰める前の、列の空白を残した版で判定する)
+    const y = fixDigits(raw || s).match(/^(.*\S)\s+([^\s\d食個本枚箱袋入切コgmlLP%])(\d{1,3}(?:,\d{3})+|\d{3,6})\s*([※*軽外内]{0,2})$/);
+    if (y) return { value: parseInt(y[3].replace(/,/g, ''), 10), negative: false, hasYen: true, mark: y[4] || '', head: normalizeLine(y[1]) };
+    // 「…ケー.320」「…ケー, 320」: 「¥1,」が崩れて千の位が欠けた金額(合計との照合で補う)
+    const k = fixed.match(/^(.*[^\d\s,.])\s*[,.]\s*(\d{3})\s*([※*軽外内]{0,2})$/);
+    if (k && k[1].trim().length >= 2) return { value: parseInt(k[2], 10), negative: false, hasYen: false, mark: k[3] || '', head: `${k[1].trim()},`, lostThousands: true };
+    return null;
+  }
   const num = parseInt(m[3].replace(/[,.]/g, ''), 10);
   if (!Number.isFinite(num)) return null;
   // 「1.280」のような区切りなしの小数は金額として扱わない
@@ -192,10 +216,10 @@ function parsePriceTail(s, raw) {
 function cleanName(head) {
   let s = head;
   s = s.replace(RE_QTY, ' ');
-  s = s.replace(/^[\s*※#・.\-:]+/, '');
+  s = s.replace(/^[\s*※#・.\-:|_!]+/, '');
   s = s.replace(/^\d{4,}\s*/, ''); // JAN などの商品コード
   s = s.replace(/^\d{1,3}\s+(?=\S)/, ''); // 行頭の連番
-  s = s.replace(/[\s*※:・.。、\-]+$/, '');
+  s = s.replace(/[\s*※:・.。、\-_|]+$/, '');
   s = s.replace(/\s{2,}/g, ' ').trim();
   return s;
 }
@@ -255,7 +279,7 @@ export function parseFrame(lines, today = new Date()) {
     out.lineKinds.push(kind);
     if (!text || text.length < 2 || conf < 10) return;
     // 列の空白を残した版(NFKC と ¥ の補正だけ行う)
-    const spaced = (ln.text || '').normalize('NFKC').replace(/[\\￥]/g, '¥').trim();
+    const spaced = stripEdgeJunk(ln.text).replace(/[\\￥]/g, '¥').trim();
 
     // 支払方法の手がかり(現金より具体的な支払方法を優先する)
     const ph = detectPayment(ln.text);
@@ -315,8 +339,8 @@ export function parseFrame(lines, today = new Date()) {
       kind.kind = 'payment'; pendingName = null; return;
     }
     if (KW.meta.test(head) && !RE_QTY.test(head)) { kind.kind = 'meta'; return; }
-    // 「(8%対象 ¥1,214)」のような括弧書きは税の内訳
-    if (/^[(\[]/.test(head) || /\)\s*$/.test(text)) { kind.kind = 'tax'; pendingName = null; return; }
+    // 「(8%対象 ¥1,214)」のような括弧書きは税の内訳。「内10%」「外 8%」も(括弧が読めていなくても)税の内訳
+    if (/^[(\[]/.test(head) || /\)\s*$/.test(text) || /(^|[\s(\[|])[内外]\s*\d{1,2}\s*%/.test(head)) { kind.kind = 'tax'; pendingName = null; return; }
     if (afterTotal) { pendingName = null; return; }
 
     if (price) {
@@ -334,7 +358,7 @@ export function parseFrame(lines, today = new Date()) {
       }
       if (isQtyLine) {
         if (pendingName && price.value >= 10) {
-          out.items.push({ name: pendingName.name, price: price.value, conf: Math.min(conf, pendingName.conf), y: pendingName.y, line: pendingName.line });
+          out.items.push({ name: pendingName.name, price: price.value, conf: Math.min(conf, pendingName.conf), y: pendingName.y, line: pendingName.line, reduced: pendingName.reduced || /[※軽]/.test(price.mark || '') || /[※軽]\s*$/.test(text) });
           kind.kind = 'item';
           out.lineKinds[pendingName.line].kind = 'item';
         } else {
@@ -344,9 +368,11 @@ export function parseFrame(lines, today = new Date()) {
       }
       if (looksLikeName(name) && price.value >= 10 && price.value <= 999999) {
         // 「…ケー, 320」のように金額の直前に区切り記号だけ残っているときは、先頭の桁が欠けた疑いがある
-        const lost = /[,、.]$/.test(head.trim()) && price.value < 1000;
+        const lost = (price.lostThousands || /[,、.]$/.test(head.trim())) && price.value < 1000;
         name = name.replace(/[,、.\s]+$/, '');
-        out.items.push({ name, price: price.value, conf, y: ln.bbox?.y0 ?? idx, line: idx, lost });
+        // 軽減税率(8%)の品目の印(「※サッポロ一番」「¥516※」「¥160軽」)
+        const reduced = /^[\s|]*[※*★☆]/.test(head) || /[※軽*]/.test(price.mark || '') || /[※軽]\s*\)?$/.test(text);
+        out.items.push({ name, price: price.value, conf, y: ln.bbox?.y0 ?? idx, line: idx, lost, reduced });
         kind.kind = 'item';
         seenItem = true;
         pendingName = null;
@@ -363,7 +389,7 @@ export function parseFrame(lines, today = new Date()) {
       if (!seenItem && out.items.length === 0 && conf >= 60 && !/\d{3,}/.test(name)) {
         storeCands.push({ name, conf, order: idx, strong: STORE_SUFFIX.test(name) });
       }
-      pendingName = { name, conf, y: ln.bbox?.y0 ?? idx, line: idx };
+      pendingName = { name, conf, y: ln.bbox?.y0 ?? idx, line: idx, reduced: /^[\s|]*[※*★☆]/.test(text) };
       kind.kind = 'text';
     }
   });
@@ -455,6 +481,7 @@ export class ReceiptAccumulator {
       ex.conf = Math.max(ex.conf, it.conf);
       ex.frames.add(this.frames);
       if (it.lost) ex.lost = true;
+      ex.reducedVotes = (ex.reducedVotes || 0) + (it.reduced ? 1 : -1);
     });
     this._mergeDuplicates();
   }
@@ -483,6 +510,7 @@ export class ReceiptAccumulator {
           keep.hits += drop.hits;
           keep.conf = Math.max(keep.conf, drop.conf);
           keep.lost = keep.lost || drop.lost;
+          keep.reducedVotes = (keep.reducedVotes || 0) + (drop.reducedVotes || 0);
           this.items = this.items.filter((x) => x !== drop);
           merged = true;
           break outer;
@@ -559,6 +587,7 @@ export class ReceiptAccumulator {
       confirmed: ex.hits >= 2 || (this.frames <= 1 && ex.conf >= 70),
       adjusted: false,
       lost: !!ex.lost,
+      reduced: (ex.reducedVotes || 0) > 0,
       variants: [...ex.prices.keys()],
     }));
     const taxOut = ReceiptAccumulator.best(this.taxOut);
@@ -568,7 +597,9 @@ export class ReceiptAccumulator {
     if (total != null && list.filter((x) => x.confirmed).length > 1) {
       for (const x of list) if (x.confirmed && x.price === total) { x.confirmed = false; x.totalLike = true; }
     }
-    const reconciled = reconcile(list, total, taxOut);
+    const bases = {};
+    for (const [rate, m] of this.taxBases) bases[rate] = ReceiptAccumulator.best(m);
+    const reconciled = reconcile(list, total, taxOut, this.taxBases.size ? bases : null);
     const confirmed = list.filter((x) => x.confirmed);
     const sum = confirmed.reduce((a, x) => a + x.price, 0);
     let match = false;
@@ -602,7 +633,7 @@ const CONFUSABLE = { 0: '689', 1: '74', 2: '7', 3: '85', 4: '19', 5: '638', 6: '
  * 解がちょうど1つに決まるときだけ採用し、その品目に adjusted 印を付ける。
  * @returns 補正した内容の説明(なければ null)
  */
-export function reconcile(list, total, taxOut) {
+export function reconcile(list, total, taxOut, bases = null) {
   if (total == null) return null;
   const confirmed = list.filter((x) => x.confirmed);
   if (!confirmed.length) return null;
@@ -610,17 +641,24 @@ export function reconcile(list, total, taxOut) {
   const targets = [total];
   if (taxOut != null) targets.push(total - taxOut);
   if (targets.includes(sum)) return null;
-  const unique = (cands) => (cands.length === 1 ? cands[0] : null);
+  // 候補が1つならそれ。複数あるときは、税率ごとの対象額(「(内 8% 対象 ¥516)」など)と
+  // 軽減税率の印の付いた品目の合計が合う候補が1つだけなら、それを選ぶ
+  const unique = (cands) => {
+    if (cands.length === 1) return cands[0];
+    if (!bases || cands.length < 2) return null;
+    const ok = cands.filter((c) => taxConsistent(list, bases, c));
+    return ok.length === 1 ? ok[0] : null;
+  };
 
   // (1) 別のフレームで読めていた金額に差し替える
   let c = unique(confirmed.flatMap((it) => it.variants.filter((p) => p !== it.price && targets.includes(sum - it.price + p)).map((p) => ({ it, p }))));
   if (c) { c.it.price = c.p; c.it.adjusted = true; return { kind: 'variant', id: c.it.id }; }
   // (2) まだ確定していない候補を1件足すと合う
-  c = unique(list.filter((it) => !it.confirmed && targets.includes(sum + it.price)));
-  if (c) { c.confirmed = true; c.adjusted = true; return { kind: 'add', id: c.id }; }
+  c = unique(list.filter((it) => !it.confirmed && targets.includes(sum + it.price)).map((it) => ({ it, add: true })));
+  if (c) { c.it.confirmed = true; c.it.adjusted = true; return { kind: 'add', id: c.it.id }; }
   // (3) 見えた回数の少ない品目を1件外すと合う
-  c = unique(confirmed.filter((it) => it.hits <= 2 && targets.includes(sum - it.price)));
-  if (c) { c.confirmed = false; return { kind: 'drop', id: c.id }; }
+  c = unique(confirmed.filter((it) => it.hits <= 2 && targets.includes(sum - it.price)).map((it) => ({ it, drop: true })));
+  if (c) { c.it.confirmed = false; return { kind: 'drop', id: c.it.id }; }
   // 先頭の桁が欠けた金額(¥1,320 → ¥320)を補うと合う候補
   const lead = [];
   for (const it of confirmed) {
@@ -654,6 +692,26 @@ export function reconcile(list, total, taxOut) {
   return null;
 }
 
+/**
+ * 補正の候補 c({it, p} 金額の差し替え / {it, add} 追加 / {it, drop} 除外)を当てはめたとき、
+ * 軽減税率の品目(8%)とそれ以外(10%)の合計が、レシートの税率ごとの対象額と一致するか。
+ * 値引きの行は直前の品目と同じ税率として数える。
+ */
+function taxConsistent(list, bases, c) {
+  const sums = { 8: 0, 10: 0 };
+  let lastReduced = false;
+  for (const it of list) {
+    const included = it === c.it ? (c.drop ? false : c.add ? true : it.confirmed) : it.confirmed;
+    if (!included) continue;
+    const price = it === c.it && c.p != null ? c.p : it.price;
+    const red = it.discount ? lastReduced : !!it.reduced;
+    if (!it.discount) lastReduced = red;
+    sums[red ? 8 : 10] += price;
+  }
+  for (const rate of ['8', '10']) if (bases[rate] != null && sums[rate] !== bases[rate]) return false;
+  return true;
+}
+
 function digitsClose(a, b) {
   if (a == null || b == null) return false;
   const sa = String(Math.abs(a)), sb = String(Math.abs(b));
@@ -676,5 +734,27 @@ const CATEGORY_HINTS = [
 export function guessCategory(store, items = []) {
   const text = `${store || ''} ${items.map((i) => i.name).join(' ')}`;
   for (const [re, cat] of CATEGORY_HINTS) if (re.test(text)) return cat;
+  return null;
+}
+
+/**
+ * 横幅を半分にして読み直した結果のうち、採用する行を選ぶ。
+ * 読み直しは倍角の「合計」「お釣り」などのためのものなので、それらの語を含む行があるときだけ採用する
+ * (普通の品目の行を縮めると文字化けするため)。
+ * @param {{text:string, confidence:number}} original 元の行
+ * @param {{text:string, confidence:number}[]} rereadLines 読み直した結果の行
+ * @returns {{text:string, confidence:number} | null}
+ */
+export function pickReread(original, rereadLines) {
+  const KEY = /(合計|小計|釣|預|お買上|現金)/;
+  if (KEY.test(normalizeLine(original.text))) return null;
+  const ls = rereadLines.map((l) => ({ text: stripEdgeJunk(l.text), confidence: l.confidence })).filter((l) => l.text.trim());
+  for (let i = 0; i < ls.length; i++) {
+    if (!KEY.test(normalizeLine(ls[i].text))) continue;
+    let text = ls[i].text, conf = ls[i].confidence;
+    // 「合計」と金額が別の行に分かれて読まれたときはつなぐ
+    if (!/\d/.test(text) && ls[i + 1] && /\d/.test(ls[i + 1].text)) { text = `${text}     ${ls[i + 1].text}`; conf = (conf + ls[i + 1].confidence) / 2; }
+    return { text, confidence: Math.max(conf, original.confidence + 1) };
+  }
   return null;
 }

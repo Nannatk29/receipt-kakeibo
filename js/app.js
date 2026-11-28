@@ -613,6 +613,8 @@ let lastSnap = null;
 let shownIds = new Set();
 let wakeLock = null;
 let matchedOnce = false;
+let scanDone = false;   // 合計と一致して読み取りを止めた状態
+let autoStop = true;    // 「続けて読む」を押したら、やり直すまで自動では止めない
 
 async function openScan() {
   const sec = $('scan');
@@ -623,6 +625,8 @@ async function openScan() {
   $('scan-status').textContent = 'カメラを準備しています';
   shownIds = new Set();
   matchedOnce = false;
+  resetDoneState();
+  autoStop = true;
   $('scan-hint').hidden = false;
   renderTape(null);
 
@@ -676,6 +680,7 @@ function onScanStatus(s) {
     $('ocr-progress').style.width = `${Math.round(Math.min(1, p) * 100)}%`;
   } else if (s.phase === 'scanning') {
     $('ocr-loading').hidden = true;
+    if (scanDone) { pill.textContent = '読み取り完了'; return; }
     $('scan').classList.add('is-scanning');
     if (s.hint === 'blur') { pill.replaceChildren('ぶれています。少し止めてください'); return; }
     const parts = [el('span', { class: 'live' }), '読み取り中'];
@@ -697,8 +702,44 @@ function tapePayText(hint) {
   return `支払い: ${seen}`;
 }
 
+function resetDoneState() {
+  scanDone = false;
+  if (scanner) scanner.paused = false;
+  $('scan-resume').hidden = true;
+  $('scan-done').classList.remove('ready');
+}
+
+/** 読み取りの状況を一言で示す(いつ終わったか分かるように) */
+function tapeStatus(snap) {
+  if (scanDone) return { cls: 'done', text: '読み取り完了。合計と一致しました' };
+  if (!snap || (!snap.items.length && snap.total == null)) return { cls: '', text: 'レシートを枠に入れてください' };
+  if (snap.total == null) return { cls: '', text: '「合計」の行を探しています(下の方も写してください)' };
+  if (snap.match) {
+    return snap.paymentHint?.type
+      ? { cls: 'done', text: '合計と一致しました' }
+      : { cls: 'done', text: '合計と一致。支払いの行も写すと支払方法を自動で選べます' };
+  }
+  const withTax = snap.taxOut != null ? snap.sum + snap.taxOut : snap.sum;
+  const base = snap.taxOut != null && Math.abs(snap.total - withTax) < Math.abs(snap.total - snap.sum) ? withTax : snap.sum;
+  const diff = snap.total - base;
+  if (diff > 0) return { cls: 'warn', text: `あと ${yen(diff)} 分の品目が未読です。ゆっくり写してください` };
+  return { cls: 'warn', text: `品目の合計が ${yen(-diff)} 多い(余分な行を読んだ可能性)` };
+}
+
 function renderTape(snap) {
   lastSnap = snap;
+  // 合計と一致したら確定できることを示し、支払いの行まで読めたら読み取りを止めて完了を知らせる
+  $('scan-done').classList.toggle('ready', !!snap?.match);
+  if (snap?.match && snap.paymentHint?.type && autoStop && !scanDone && scanner) {
+    scanDone = true;
+    scanner.paused = true;
+    $('scan').classList.remove('is-scanning');
+    $('scan-status').textContent = '読み取り完了';
+    $('scan-resume').hidden = false;
+  }
+  const st = tapeStatus(snap);
+  $('tape-status').textContent = st.text;
+  $('tape-status').className = `tape-status ${st.cls}`;
   const ol = $('tape-items');
   const payText = tapePayText(snap?.paymentHint);
   $('tape-pay').hidden = !payText;
@@ -906,7 +947,14 @@ function bind() {
   $('add-demo').addEventListener('click', addDemo);
   $('close-scan').addEventListener('click', closeScan);
   $('scan-error-close').addEventListener('click', closeScan);
-  $('scan-reset').addEventListener('click', () => { shownIds = new Set(); matchedOnce = false; scanner?.reset(); });
+  $('scan-reset').addEventListener('click', () => { shownIds = new Set(); matchedOnce = false; autoStop = true; resetDoneState(); scanner?.reset(); });
+  $('scan-resume').addEventListener('click', () => {
+    // 一致した内容に納得できないときは、読み取りを続ける(やり直すまでは自動で止めない)
+    autoStop = false;
+    resetDoneState();
+    $('scan').classList.add('is-scanning');
+    renderTape(lastSnap);
+  });
   $('scan-done').addEventListener('click', finishScan);
   $('torch').addEventListener('click', async () => {
     const on = $('torch').getAttribute('aria-pressed') !== 'true';
