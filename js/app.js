@@ -246,17 +246,30 @@ function renderPayPicker(selectedId, suggestIds = []) {
 }
 function selectedPayId() { return document.querySelector('#f-pay input[name="pay"]:checked')?.value || null; }
 
-/** レシートの下4桁を、選んだカード(下4桁が未登録)に覚えさせる欄 */
-function learnableLast4() {
-  const l4 = scanInfo?.payHint?.last4;
+/**
+ * 自動で選べなかったとき、レシートの手がかり(カード番号の下4桁、または「TS3カード」などの表示)を
+ * ユーザーが選んだ支払方法に覚えさせる。次回から自動で選ばれるようになる。
+ */
+function learnableCue() {
+  const hint = scanInfo?.payHint;
   const m = methods.get(selectedPayId());
-  if (!l4 || !m || !isCardType(m.type) || m.last4 || methods.list.some((x) => x.last4 === l4)) return null;
-  return { l4, m };
+  if (!hint || !m || m.type === 'cash') return null;
+  if (scanInfo?.payMatch?.id === m.id) return null; // すでに自動で選べている
+  if (hint.last4 && isCardType(m.type) && !m.last4 && !methods.list.some((x) => x.last4 === hint.last4)) {
+    return { kind: 'last4', value: hint.last4, m };
+  }
+  if (hint.service && !(m.keywords || []).includes(hint.service) && !m.name.includes(hint.service)) {
+    return { kind: 'keyword', value: hint.service, m };
+  }
+  return null;
 }
 function syncLearn() {
-  const t = learnableLast4();
+  const t = learnableCue();
   $('f-learn-row').hidden = !t;
-  if (t) $('f-learn-text').textContent = `「${t.m.name}」にカード番号の下4桁「${t.l4}」を登録する(次回からこのカードが自動で選ばれます)`;
+  if (!t) return;
+  $('f-learn-text').textContent = t.kind === 'last4'
+    ? `「${t.m.name}」にカード番号の下4桁「${t.value}」を登録する(次回からこのカードが自動で選ばれます)`
+    : `レシートの「${t.value}」という表示を「${t.m.name}」として覚える(次回からこの支払方法が自動で選ばれます)`;
 }
 function setPayHint(text, kind = 'ok') {
   const h = $('f-pay-hint');
@@ -359,14 +372,16 @@ function openEditor(record, info = null) {
   if (info) {
     check.hidden = false;
     const sum = (r.items || []).reduce((a, x) => a + x.price, 0);
+    const src = { payment: 'カード等の支払額', cash: 'お預りとお釣り', taxbase: '税率ごとの対象額' }[info.totalSource];
+    const srcNote = src ? `(「合計」の行は読めなかったため、${src}から割り出しました)` : '';
     if (info.match) {
       check.className = 'check ok';
       check.replaceChildren(el('span', { class: 'mini-stamp' }, '合計', el('br'), '一致'),
-        el('p', {}, `品目の合計がレシートの合計 ${yen(info.total)} と一致しました。`,
+        el('p', {}, `品目の合計がレシートの合計 ${yen(info.total)} と一致しました${srcNote}。`,
           info.reconciled ? '読み違いの可能性がある1行を合計に合わせて直しています(色の付いた行)。' : '内容を確認して保存してください。'));
     } else if (info.total != null) {
       check.className = 'check warn';
-      check.replaceChildren(el('p', {}, `品目の合計 ${yen(sum)} とレシートの合計 ${yen(info.total)} が ${yen(Math.abs(info.total - sum))} ずれています。抜けている品目がないか確認してください。`));
+      check.replaceChildren(el('p', {}, `品目の合計 ${yen(sum)} とレシートの合計 ${yen(info.total)}${srcNote} が ${yen(Math.abs(info.total - sum))} ずれています。抜けている品目や金額の読み違いがないか確認してください。`));
     } else {
       check.className = 'check warn';
       check.replaceChildren(el('p', {}, 'レシートの「合計」の行が読み取れませんでした。合計金額を確認してください。'));
@@ -424,8 +439,12 @@ function saveEditor(e) {
     source: editing?.source || (scanInfo ? 'scan' : 'manual'),
     demo: editing?.demo || undefined,
   };
-  const learn = learnableLast4();
-  if (learn && $('f-learn').checked) { learn.m.last4 = learn.l4; methods.save(); }
+  const learn = learnableCue();
+  if (learn && $('f-learn').checked) {
+    if (learn.kind === 'last4') learn.m.last4 = learn.value;
+    else learn.m.keywords = [...(learn.m.keywords || []), learn.value].slice(-10);
+    methods.save();
+  }
   if (!store.upsert(rec)) return;
   prefs.set('lastPaymentId', payId);
   closeEditor();
@@ -508,6 +527,7 @@ function openMethodEditor(m, { presetType = null, fromEntry = false } = {}) {
   const color = m?.color || nextColor(methods.list);
   document.querySelectorAll('#m-colors input').forEach((i) => { i.checked = i.value === color; });
   $('m-archived').checked = !!m?.archived;
+  renderKeywordChips(m);
   $('m-archive-row').hidden = !m;
   const n = m ? methods.usage(m.id) : 0;
   const isLast = m && methods.active().length === 1 && !m.archived;
@@ -518,6 +538,14 @@ function openMethodEditor(m, { presetType = null, fromEntry = false } = {}) {
   onMethodTypeChange();
   $('method-editor').showModal();
   if (!m) setTimeout(() => $('m-name').focus(), 50);
+}
+
+let editingKeywords = [];
+function renderKeywordChips(m) {
+  if (m !== undefined) editingKeywords = [...(m?.keywords || [])];
+  $('m-keywords-row').hidden = !editingKeywords.length;
+  $('m-keywords').replaceChildren(...editingKeywords.map((k, i) => el('span', {}, k,
+    el('button', { type: 'button', 'aria-label': `「${k}」を忘れる`, onclick: () => { editingKeywords.splice(i, 1); renderKeywordChips(); } }, icon('M6 6l12 12M18 6L6 18')))));
 }
 
 function saveMethod(e) {
@@ -537,6 +565,7 @@ function saveMethod(e) {
     brand: isCardType(type) ? $('m-brand').value || undefined : undefined,
     last4: last4 || undefined,
     archived: methodEditing ? $('m-archived').checked || undefined : undefined,
+    keywords: editingKeywords.length ? [...editingKeywords] : undefined,
   };
   if (data.archived && !methods.list.some((x) => x.id !== methodEditing?.id && !x.archived)) {
     toast('表示する支払方法が1つもなくなるため、非表示にできません'); return;
@@ -730,7 +759,7 @@ function finishScan() {
     total,
   };
   const payMatch = matchMethod(snap.paymentHint, methods.list);
-  openEditor(record, { match: snap.match, total: snap.total, taxOut: snap.taxOut, candidates, reconciled: !!snap.reconciled, payMatch, payHint: snap.paymentHint });
+  openEditor(record, { match: snap.match, total: snap.total, totalSource: snap.totalSource, taxOut: snap.taxOut, candidates, reconciled: !!snap.reconciled, payMatch, payHint: snap.paymentHint });
 }
 
 // ---- 設定・データ ---------------------------------------------------------
@@ -774,6 +803,10 @@ async function importJSON(file) {
       if (BRANDS.includes(m.brand)) clean.brand = m.brand;
       if (/^\d{4}$/.test(m.last4 || '')) clean.last4 = m.last4;
       if (m.archived) clean.archived = true;
+      if (Array.isArray(m.keywords)) {
+        const kw = m.keywords.filter((k) => typeof k === 'string' && k.trim()).map((k) => k.trim().slice(0, 30)).slice(0, 10);
+        if (kw.length) clean.keywords = kw;
+      }
       const i = methods.list.findIndex((x) => x.id === clean.id);
       if (i >= 0) methods.list[i] = clean; else { methods.list.push(clean); addedMethods++; }
     }

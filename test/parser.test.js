@@ -155,3 +155,106 @@ test('支払方法別の集計は種類ごとにまとめる', () => {
   assert.deepEqual(g.map((x) => [x.type, x.total, x.count]), [['credit', 4500, 3], ['cash', 1200, 1], ['qr', 800, 1]]);
   assert.deepEqual(g[0].methods.map((x) => [x.method.id, x.total]), [['raku', 3500], ['aeon', 1000]]);
 });
+
+// ---- 実レシート(ドラッグストア、横倍角の合計・カード払い)で見つかった問題 ----------
+// 行の文字列は、実際のカメラ映像を OCR した結果をそのまま使っている
+const realFrame = [
+  L('2026年11月11日(水)18:49 しレケ od', 68),
+  L('従業軸No008177   資格者00817', 58),
+  L('※サッポロー番 みぞ 5食 。 \\516', 66),
+  L('(特売価格)           I', 87),
+  L('シュミテクトやさしくホワイトニ', 93),
+  L('3コx単767      \\2,301', 58),
+  L('キュレル 皮脂トラブルケー, 320', 60),
+  L('アイテム値引 15%     -\\198', 71),
+  L('i 導言寺      \\3う3.所3昌', 0), // 横倍角の「合計」は読めない
+  L('(内10% 対象   \\3,423)', 60),
+  L('(内10%           \\311)', 31),
+  L('(内 8% 対象       \\516)', 88),
+  L('(内 8%                    \\38)', 87),
+  L('(税合計          \\349)', 65),
+  L('3S3カガード                    \\3, 939', 57),
+];
+
+test('実レシート: 税合計を合計にせず、カード払いの金額と税率ごとの対象額を拾う', () => {
+  const r = parseFrame(realFrame, today);
+  assert.equal(r.total, null);
+  assert.equal(r.payAmount, 3939);
+  assert.deepEqual(r.taxBases, { 8: 516, 10: 3423 });
+  assert.equal(r.payHint.type, 'credit');
+  assert.equal(r.payHint.service, '3S3カガード');
+  assert.deepEqual(r.items.map((i) => [i.name, i.price, !!i.lost]), [
+    ['サッポロー番みぞ 5食', 516, false], ['シュミテクトやさしくホワイトニ', 2301, false],
+    ['キュレル皮脂トラブルケー', 320, true], ['アイテム値引 15%', -198, false],
+  ]);
+});
+
+test('実レシート: 合計の行が読めなくても合計を割り出し、欠けた千の位を補う', () => {
+  const acc = new ReceiptAccumulator();
+  acc.addFrame(parseFrame(realFrame, today));
+  acc.addFrame(parseFrame(realFrame, today));
+  const s = acc.snapshot();
+  assert.equal(s.total, 3939);
+  assert.equal(s.totalSource, 'payment');
+  assert.equal(s.match, true);
+  assert.equal(s.reconciled.kind, 'lead');
+  assert.equal(s.items.find((i) => i.name.startsWith('キュレル')).price, 1320);
+});
+
+test('合計の行を読み直せたときは、その金額を採る', () => {
+  const acc = new ReceiptAccumulator();
+  const fixed = realFrame.map((l) => (l.text.startsWith('i 導言寺') ? L('|合計           \\3,939', 34) : l));
+  acc.addFrame(parseFrame(fixed, today));
+  acc.addFrame(parseFrame(fixed, today));
+  const s = acc.snapshot();
+  assert.equal(s.total, 3939);
+  assert.equal(s.totalSource, 'line');
+});
+
+test('金額が合計と同じ品目は、合計や支払いの行の読み違いとして外す', () => {
+  const acc = new ReceiptAccumulator();
+  const f = [L('おにぎり   ¥160'), L('お茶   ¥140'), L('合計   ¥300'), L('ネオカガカー   ¥300')];
+  acc.addFrame(parseFrame(f, today));
+  acc.addFrame(parseFrame(f, today));
+  const s = acc.snapshot();
+  assert.deepEqual(s.items.filter((i) => i.confirmed).map((i) => i.price), [160, 140]);
+  assert.equal(s.match, true);
+});
+
+test('現金払いは お預り − お釣り からも合計を割り出す', () => {
+  const acc = new ReceiptAccumulator();
+  const f = [L('パン   ¥238'), L('牛乳   ¥198'), L('ギ言寺  ??', 0), L('お預り   ¥1,000'), L('お釣り   ¥564')];
+  acc.addFrame(parseFrame(f, today));
+  acc.addFrame(parseFrame(f, today));
+  const s = acc.snapshot();
+  assert.equal(s.total, 436);
+  assert.equal(s.totalSource, 'cash');
+  assert.equal(s.match, true);
+});
+
+test('店名: 挨拶文は使わず、電話番号と同じ行の店名を拾う', () => {
+  const r = parseFrame([
+    L('本日もご来店', 80), L('まことにありがとうございます', 85),
+    L('アカカベ枚方公園店 072-804-4193', 82), L('2026年11月11日(水)18:49', 80),
+  ], today);
+  assert.deepEqual(r.store.map((s) => s.name), ['アカカベ枚方公園店']);
+});
+
+test('「○○カード ¥金額」はカード払い。ポイントカードの行はカード払いにしない', () => {
+  assert.deepEqual(detectPayment('TS3カード        ¥3,939'), { type: 'credit', service: 'TS3カード' });
+  assert.deepEqual(detectPayment('イオンカード払い ¥1,200'), { type: 'credit', service: 'イオンカード' });
+  assert.deepEqual(detectPayment('ポイントカード ¥0'), {});
+});
+
+test('覚えたレシートの表示(OCR の崩れを許す)で支払方法を選ぶ', () => {
+  const ms = [...M, { id: 'ts3', name: 'トヨタカード', type: 'credit', keywords: ['TS3カード'] }];
+  assert.equal(matchMethod({ type: 'credit', service: '3S3カガード' }, ms).id, 'ts3'); // 実際の崩れ方
+  assert.equal(matchMethod({ type: 'credit', service: 'セゾンカード' }, ms).id, undefined); // 別のカードとは一致しない
+  assert.equal(matchMethod({ type: 'credit', service: 'TS3カード' }, ms).id, 'ts3');
+  assert.equal(matchMethod({ type: 'credit', service: 'S3カード' }, ms).id, 'ts3');
+});
+
+test('崩れた数量行(「3コメx単__ 767」)も数量行として扱い、前の行の品名を使う', () => {
+  const r = parseFrame([L('シュミテクトやさしくホワイトニ'), L('3コメx単__ 767        ¥2,301'), L('キュレル 皮脂トラブルケ   ¥1,320')], today);
+  assert.deepEqual(r.items.map((i) => [i.name, i.price]), [['シュミテクトやさしくホワイトニ', 2301], ['キュレル皮脂トラブルケ', 1320]]);
+});

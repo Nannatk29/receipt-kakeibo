@@ -409,3 +409,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 .check-row { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; }
 .check-row input { width: 20px; height: 20px; margin: 1px 0 0; flex: none; accent-color: var(--accent); }
 .check-row.learn { margin-top: 10px; font-size: 13px; padding: 8px 10px; border-radius: 10px; background: var(--accent-soft); }
+.kw-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.kw-chips span { display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px 2px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--paper); font-size: 13px; }
+.kw-chips button { width: 28px; height: 28px; border: 0; background: transparent; color: var(--ink-2); display: grid; place-items: center; border-radius: 50%; }
+.kw-chips svg { width: 14px; height: 14px; }

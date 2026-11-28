@@ -6,7 +6,9 @@ const abs = (p) => new URL(p, document.baseURI).href;
 
 // ガイド枠(画面に対する割合)。CSS の .guide と一致させる
 export const GUIDE = { w: 0.88, h: 0.50, top: 0.14 };
-const OCR_WIDTH = 960; // OCR に渡す画像の幅
+const OCR_WIDTH = 1000; // OCR に渡す画像の幅
+// 文字認識は表示している枠より左右に少し広く行う(枠からはみ出した金額の端の桁も拾うため)
+const OCR_MARGIN_X = 0.05;
 
 let workerPromise = null;
 /** Tesseract ワーカーを用意する(2回目以降は同じものを返す) */
@@ -48,6 +50,8 @@ export class LiveScanner {
     this.acc = new ReceiptAccumulator();
     this.canvas = document.createElement('canvas');
     this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
+    this.strip = document.createElement('canvas'); // 背の高い行を読み直すための作業用
+    this.sctx = this.strip.getContext('2d');
     this.running = false;
     this.paused = false;
     this.stream = null;
@@ -111,7 +115,12 @@ export class LiveScanner {
     const cw = v.clientWidth, ch = v.clientHeight;
     const scale = Math.max(cw / vw, ch / vh);
     const offX = (cw - vw * scale) / 2, offY = (ch - vh * scale) / 2;
-    const gx = cw * (1 - GUIDE.w) / 2, gy = ch * GUIDE.top, gw = cw * GUIDE.w, gh = ch * GUIDE.h;
+    let gx = cw * (1 - GUIDE.w) / 2, gw = cw * GUIDE.w;
+    const gy = ch * GUIDE.top, gh = ch * GUIDE.h;
+    // 左右に広げる(画面と映像の範囲内に収める)
+    const left = Math.max(0, offX, gx - cw * OCR_MARGIN_X);
+    const right = Math.min(cw, offX + vw * scale, gx + gw + cw * OCR_MARGIN_X);
+    gx = left; gw = right - left;
     return {
       sx: (gx - offX) / scale, sy: (gy - offY) / scale, sw: gw / scale, sh: gh / scale,
       screen: { x: gx, y: gy, w: gw, h: gh },
@@ -169,6 +178,8 @@ export class LiveScanner {
       for (const b of data.blocks || []) for (const p of b.paragraphs) for (const l of p.lines) {
         lines.push({ text: l.text, confidence: l.confidence, bbox: l.bbox });
       }
+      await this._rereadTallLines(worker, lines, W, H);
+      if (!this.running) break;
       const parsed = parseFrame(lines);
       this.acc.addFrame(parsed);
 
@@ -183,6 +194,37 @@ export class LiveScanner {
       const avg = this.timings.reduce((a, b) => a + b, 0) / this.timings.length;
       this.onStatus({ phase: 'scanning', ms: avg, lines: lines.length });
       this.onUpdate(this.acc.snapshot());
+    }
+  }
+
+  /**
+   * レシートの「合計」「お釣り」などに使われる太字の倍角文字は、そのままだとほぼ読めないが、
+   * 横幅を半分に縮めると普通の文字と同じ形になって読めることが多い。
+   * 読めていない行だけを切り出して縮め、もう一度読む(結果が良ければ置き換える)。
+   */
+  async _rereadTallLines(worker, lines, W, H) {
+    const hs = lines.filter((l) => l.bbox && l.confidence >= 50).map((l) => l.bbox.y1 - l.bbox.y0).sort((a, b) => a - b);
+    if (hs.length < 3) return;
+    const med = hs[Math.floor(hs.length / 2)];
+    // うまく読めていない行(倍角は高さが普通のこともあるので、信頼度で選ぶ)。
+    // 画像の上端・下端で切れている行と、小さすぎる行は除き、信頼度の低い順に最大2行。
+    const tall = lines.filter((l) => l.bbox && l.confidence < 45 && l.bbox.y0 > 3 && l.bbox.y1 < H - 3
+      && l.bbox.y1 - l.bbox.y0 > med * 0.8 && l.bbox.x1 - l.bbox.x0 > W * 0.3)
+      .sort((a, b) => a.confidence - b.confidence).slice(0, 2);
+    for (const l of tall) {
+      const y0 = Math.max(0, l.bbox.y0 - 4), y1 = Math.min(H, l.bbox.y1 + 4), h = y1 - y0;
+      if (h < 8) continue;
+      this.strip.width = Math.round(W / 2);
+      this.strip.height = h;
+      this.sctx.drawImage(this.canvas, 0, y0, W, h, 0, 0, this.strip.width, h);
+      try {
+        const { data } = await worker.recognize(this.strip, {}, { blocks: true, text: false });
+        const parts = [];
+        let sum = 0, n = 0;
+        for (const b of data.blocks || []) for (const p of b.paragraphs) for (const x of p.lines) { parts.push(x.text.trim()); sum += x.confidence; n++; }
+        const conf = n ? sum / n : 0;
+        if (parts.length && conf > l.confidence) { l.text = parts.join('     '); l.confidence = conf; }
+      } catch { /* 読み直しに失敗したら元のまま */ }
     }
   }
 

@@ -53,7 +53,7 @@ const KW = {
   deposit: /(お?預り|お?預かり|預り金|お?釣り?|釣銭|おつり|釣り銭)/,
   payment: /(現金|クレジット|ｸﾚｼﾞｯﾄ|カード|デビット|電子マネー|PayPay|PAYPAY|楽天ペイ|d払い|au ?PAY|メルペイ|Suica|SUICA|PASMO|ICOCA|nanaco|WAON|楽天Edy|Edy|QUICPay|交通系|コード決済|バーコード決済|お支払|支払|残高|利用額|VISA|JCB|AMEX)/,
   discount: /(値引|値引き|割引|割り引|クーポン|OFF|オフ|引$)/i,
-  meta: /(TEL|Tel|電話|FAX|領収|レシート|No[.:]|NO[.:]|登録番号|担当|レジ|責任者|点数|\d+点$|営業時間|ありがとう|お越し|お問い?合わせ|〒|http|www|伝票|取引|承認|会員|ポイント|pt|P残高|発行|再発行|お客様|お得|店舗|返品|交換|保管|控え)/i,
+  meta: /(TEL|Tel|電話|FAX|領収|レシート|No[.:]|NO[.:]|登録番号|担当|レジ|責任者|点数|\d+点$|営業時間|ありがとう|お越し|ご来店|来店|いらっしゃいませ|毎度|本日も|お問い?合わせ|〒|http|www|伝票|取引|承認|会員|ポイント|pt|P残高|発行|再発行|お客様|お得|店舗|返品|交換|保管|控え)/i,
 };
 
 // 支払方法の手がかり。英字は大文字小文字を区別する(「id」などの誤検出を避けるため)
@@ -104,6 +104,17 @@ export function detectPayment(raw) {
   for (const [re, brand] of PAY_BRANDS) if (re.test(s)) { hint.brand = brand; break; }
   if (!hint.type) for (const [re, type] of PAY_TYPES) if (re.test(s)) { hint.type = type; break; }
   if (hint.brand && !hint.type) hint.type = 'credit';
+  // 「TS3カード ¥3,939」のように、カード名と金額だけの行はカード払い(ポイントカードなどは除く)
+  if (!hint.type || (hint.type === 'credit' && !hint.service)) {
+    const t = normalizeLine(raw);
+    // OCR は「カード」を「カガード」「カ一ド」のように崩すことがある
+    const m = t.match(/^(.{0,14}?カ[ガカ]?[ー一-]?ド)(?:払い?|支払い?)?\s*[¥\\]?\s*[\d,.\s]+$/);
+    if (m && /\d/.test(t) && !/(ポイント|会員|Ponta|Tカード|スタンプ|メンバーズ|番号|No)/i.test(t)) {
+      hint.type = hint.type || 'credit';
+      const nm = m[1].replace(/^[^\p{L}\p{N}]+/u, '').trim();
+      if (nm.length >= 3) hint.service = nm;
+    }
+  }
   // 伏せ字のカード番号「************1234」「XXXX-XXXX-XXXX-1234」の下4桁(ポイントカードの番号は除く)
   if (!/(ポイント|会員|Ponta|Tカード|nanaco番号)/.test(s)) {
     // OCR は伏せ字の「*」を「ネ」「米」などと読むことがある
@@ -114,9 +125,16 @@ export function detectPayment(raw) {
   return hint;
 }
 
+// 電話番号(「072-804-4193」「03(1234)5678」など)。店名は電話番号と同じ行かその上にあることが多い
+const RE_PHONE = /0\d{1,4}\s*[-ー−(（]\s*\d{1,4}\s*[-ー−)）]\s*\d{3,4}/;
+const STORE_SUFFIX = /(店|局|株式会社|\(株\)|ストア|マート|ショップ|商店|薬局|ドラッグ|センター)/;
+
 // 末尾の金額: 「¥1,280」「1280円」「398※」「-50」「▲50」など
 const RE_PRICE_TAIL = /(?:^|[\s:])([-▲△]?)\s*(¥?)\s*((?:\d{1,3}(?:[,.]\d{3})+)|\d{1,6})\s*(円)?\s*([※*軽外内非税TEXRJ8%]{0,3})\s*\)?\s*$/;
-const RE_QTY = /(\d+)\s*(個|コ|点|本|枚|袋|パック|P|ヶ)?\s*[xX×*@＠]\s*(単)?\s*¥?\s*\d+|単\s*¥?\s*\d+|@\s*¥?\s*\d+|\d+\s*(個|コ)\s*$/;
+// 数量の行(「2コX単99」「3コ×単 767」など)。OCR は「×」を「メ」「x」と読んだり、余計な記号を挟んだりする
+const RE_QTY = /(\d+)\s*(個|コ|点|本|枚|袋|パック|P|ヶ)?\s*[xX×*@＠メ]\s*(単)?\s*¥?\s*\d+|単[^\d\s]{0,3}\s*¥?\s*\d+|@\s*¥?\s*\d+|\d+\s*(個|コ)\s*$/;
+// 数量の行から数字や記号を除いた残り(品名らしい文字がほとんど残らなければ数量の行)
+const qtyResidue = (s) => s.replace(/[\d\sxX×*@＠メコ個点本枚袋ヶ単_\-.,:;|¥]/g, '');
 
 /** OCR の数字によくある誤認識を直す(数字の並びの中だけ) */
 // (古い iOS Safari は正規表現の後読みに対応していないため、1文字ずつ見る)
@@ -177,7 +195,7 @@ function cleanName(head) {
   s = s.replace(/^[\s*※#・.\-:]+/, '');
   s = s.replace(/^\d{4,}\s*/, ''); // JAN などの商品コード
   s = s.replace(/^\d{1,3}\s+(?=\S)/, ''); // 行頭の連番
-  s = s.replace(/[\s*※:・.\-]+$/, '');
+  s = s.replace(/[\s*※:・.。、\-]+$/, '');
   s = s.replace(/\s{2,}/g, ' ').trim();
   return s;
 }
@@ -222,6 +240,7 @@ export function parseFrame(lines, today = new Date()) {
   const out = {
     items: [], total: null, subtotal: null, taxOut: null, taxIn: null,
     date: null, store: [], payment: null, payHint: {}, lineKinds: [],
+    payAmount: null, deposit: null, change: null, taxBases: {},
   };
   let pendingName = null; // 価格の無い商品名(次の数量行で確定するもの)
   let seenItem = false;
@@ -244,6 +263,14 @@ export function parseFrame(lines, today = new Date()) {
     for (const k of ['service', 'brand', 'last4']) if (ph[k] && !out.payHint[k]) out.payHint[k] = ph[k];
 
     if (anchorLine < 0 && /(TEL|Tel|電話|〒|都|道|府|県|市|区|町)/.test(text) && /\d/.test(text)) anchorLine = idx;
+    if (RE_PHONE.test(text)) {
+      if (anchorLine < 0) anchorLine = idx;
+      // 「アカカベ枚方公園店 072-804-4193」のように電話番号と同じ行にある店名
+      const nm = cleanName(text.replace(RE_PHONE, ' ').replace(/(TEL|Tel|tel|電話|FAX|Fax)\s*[:.]?/g, ' '));
+      if (looksLikeName(nm) && conf >= 50 && !/\d{3,}/.test(nm)) storeCands.push({ name: nm, conf, order: idx - 0.5, strong: STORE_SUFFIX.test(nm) });
+      kind.kind = 'meta';
+      return;
+    }
     const date = findDate(text, today);
     if (date && anchorLine < 0) anchorLine = idx;
     if (date) {
@@ -259,7 +286,8 @@ export function parseFrame(lines, today = new Date()) {
       if (price) { out.subtotal = price.value; kind.kind = 'subtotal'; }
       pendingName = null; return;
     }
-    if (KW.total.test(head) && !KW.taxBase.test(head) && !/対象/.test(head)) {
+    const taxish = /^[(\[「『]/.test(head) || /(税合計|消費税|内税|外税|税額|対象|課税)/.test(head);
+    if (KW.total.test(head) && !taxish) {
       if (price && price.value > 0) {
         if (!out.total || conf > out.total.conf) out.total = { value: price.value, conf };
         kind.kind = 'total';
@@ -273,9 +301,17 @@ export function parseFrame(lines, today = new Date()) {
     }
     if (KW.taxIn.test(head) || KW.taxBase.test(head)) {
       if (price && KW.taxIn.test(head)) out.taxIn = price.value;
+      // 「(内10% 対象 ¥3,423)」: 税率ごとの対象額(合計の手がかりになる)
+      const rate = head.match(/(\d{1,2})\s*%/);
+      if (price && rate && /対象/.test(head)) out.taxBases[rate[1]] = price.value;
       kind.kind = 'tax'; pendingName = null; return;
     }
     if (KW.deposit.test(head) || ((KW.payment.test(head) || ph.type) && price)) {
+      if (price) {
+        if (/(預り|預かり)/.test(head)) out.deposit = price.value;
+        else if (/(釣|おつり)/.test(head)) out.change = price.value;
+        else if (!/(残高|ポイント|利用可能|チャージ)/.test(head) && price.value > 0) out.payAmount = price.value;
+      }
       kind.kind = 'payment'; pendingName = null; return;
     }
     if (KW.meta.test(head) && !RE_QTY.test(head)) { kind.kind = 'meta'; return; }
@@ -286,7 +322,7 @@ export function parseFrame(lines, today = new Date()) {
     if (price) {
       const isDiscount = KW.discount.test(head) || price.negative;
       let name = cleanName(head);
-      const isQtyLine = RE_QTY.test(head) && !looksLikeName(name);
+      const isQtyLine = RE_QTY.test(head) && (!looksLikeName(name) || qtyResidue(head).length < 2);
       if (isDiscount) {
         const value = price.value;
         if (value > 0 && value < 100000) {
@@ -307,7 +343,10 @@ export function parseFrame(lines, today = new Date()) {
         pendingName = null; return;
       }
       if (looksLikeName(name) && price.value >= 10 && price.value <= 999999) {
-        out.items.push({ name, price: price.value, conf, y: ln.bbox?.y0 ?? idx, line: idx });
+        // 「…ケー, 320」のように金額の直前に区切り記号だけ残っているときは、先頭の桁が欠けた疑いがある
+        const lost = /[,、.]$/.test(head.trim()) && price.value < 1000;
+        name = name.replace(/[,、.\s]+$/, '');
+        out.items.push({ name, price: price.value, conf, y: ln.bbox?.y0 ?? idx, line: idx, lost });
         kind.kind = 'item';
         seenItem = true;
         pendingName = null;
@@ -322,7 +361,7 @@ export function parseFrame(lines, today = new Date()) {
     const name = cleanName(text);
     if (looksLikeName(name)) {
       if (!seenItem && out.items.length === 0 && conf >= 60 && !/\d{3,}/.test(name)) {
-        storeCands.push({ name, conf, order: idx, strong: /(店|株式会社|\(株\)|ストア|マート|ショップ|商店|薬局|ドラッグ)/.test(name) });
+        storeCands.push({ name, conf, order: idx, strong: STORE_SUFFIX.test(name) });
       }
       pendingName = { name, conf, y: ln.bbox?.y0 ?? idx, line: idx };
       kind.kind = 'text';
@@ -347,6 +386,10 @@ export class ReceiptAccumulator {
     this.stores = [];
     this.payments = new Map();
     this.payHints = { type: new Map(), service: new Map(), brand: new Map(), last4: new Map() };
+    this.payAmounts = new Map();
+    this.deposits = new Map();
+    this.changes = new Map();
+    this.taxBases = new Map(); // 税率 → (金額 → 票)
     this.seq = 0;
   }
 
@@ -367,6 +410,13 @@ export class ReceiptAccumulator {
     if (parsed.payment) ReceiptAccumulator.vote(this.payments, parsed.payment, 1);
     for (const k of Object.keys(this.payHints)) if (parsed.payHint?.[k]) ReceiptAccumulator.vote(this.payHints[k], parsed.payHint[k], 1);
     for (const s of parsed.store) this._addStore(s);
+    if (parsed.payAmount) ReceiptAccumulator.vote(this.payAmounts, parsed.payAmount, 1);
+    if (parsed.deposit != null) ReceiptAccumulator.vote(this.deposits, parsed.deposit, 1);
+    if (parsed.change != null) ReceiptAccumulator.vote(this.changes, parsed.change, 1);
+    for (const [rate, v] of Object.entries(parsed.taxBases || {})) {
+      if (!this.taxBases.has(rate)) this.taxBases.set(rate, new Map());
+      ReceiptAccumulator.vote(this.taxBases.get(rate), v, 1);
+    }
 
     // 1) 既存の品目と対応付ける(同じフレーム内で同じ品目に二重には対応させない)
     const used = new Set();
@@ -404,6 +454,7 @@ export class ReceiptAccumulator {
       ex.hits++;
       ex.conf = Math.max(ex.conf, it.conf);
       ex.frames.add(this.frames);
+      if (it.lost) ex.lost = true;
     });
     this._mergeDuplicates();
   }
@@ -431,6 +482,7 @@ export class ReceiptAccumulator {
           for (const f of drop.frames) keep.frames.add(f);
           keep.hits += drop.hits;
           keep.conf = Math.max(keep.conf, drop.conf);
+          keep.lost = keep.lost || drop.lost;
           this.items = this.items.filter((x) => x !== drop);
           merged = true;
           break outer;
@@ -464,6 +516,37 @@ export class ReceiptAccumulator {
     return hint;
   }
 
+  /**
+   * 合計金額を決める。「合計」の行が読めないレシート(太字の倍角など)もあるので、
+   * カード等の支払額・お預り−お釣り・税率ごとの対象額の和も手がかりにして、
+   * 票の多い金額を採る。品目の合計と一致する金額はさらに信頼する。
+   */
+  _chooseTotal(sum, taxOut) {
+    const best = ReceiptAccumulator.best;
+    const score = new Map();
+    const add = (v, w, src) => {
+      if (v == null || !(v > 0)) return;
+      const cur = score.get(v) || { w: 0, src: [] };
+      cur.w += w;
+      if (!cur.src.includes(src)) cur.src.push(src);
+      score.set(v, cur);
+    };
+    for (const [v, w] of this.totals) add(v, w * 2, 'line');
+    for (const [v, w] of this.payAmounts) add(v, w * 1.5, 'payment');
+    const dep = best(this.deposits), chg = best(this.changes);
+    if (dep != null && chg != null && dep - chg > 0) add(dep - chg, 1.5, 'cash');
+    if (this.taxBases.size) {
+      let s = 0;
+      for (const m of this.taxBases.values()) s += best(m);
+      add(s, 1, 'taxbase');
+      if (taxOut != null) add(s + taxOut, 1, 'taxbase');
+    }
+    for (const [v, o] of score) if (sum > 0 && (v === sum || (taxOut != null && v === sum + taxOut))) o.w += 1;
+    let total = null, info = null;
+    for (const [v, o] of score) if (!info || o.w > info.w) { total = v; info = o; }
+    return { total, source: info ? (info.src.includes('line') ? 'line' : info.src[0]) : null };
+  }
+
   /** 現時点のレシート内容 */
   snapshot() {
     const list = [...this.items].sort((a, b) => a.order - b.order).map((ex) => ({
@@ -475,10 +558,16 @@ export class ReceiptAccumulator {
       discount: ex.discount,
       confirmed: ex.hits >= 2 || (this.frames <= 1 && ex.conf >= 70),
       adjusted: false,
+      lost: !!ex.lost,
       variants: [...ex.prices.keys()],
     }));
-    const total = ReceiptAccumulator.best(this.totals);
     const taxOut = ReceiptAccumulator.best(this.taxOut);
+    const rawSum = list.filter((x) => x.confirmed).reduce((a, x) => a + x.price, 0);
+    const { total, source: totalSource } = this._chooseTotal(rawSum, taxOut);
+    // 金額が合計と同じ「品目」は、合計や支払いの行を読み違えたもの(ほかに品目があるとき)
+    if (total != null && list.filter((x) => x.confirmed).length > 1) {
+      for (const x of list) if (x.confirmed && x.price === total) { x.confirmed = false; x.totalLike = true; }
+    }
     const reconciled = reconcile(list, total, taxOut);
     const confirmed = list.filter((x) => x.confirmed);
     const sum = confirmed.reduce((a, x) => a + x.price, 0);
@@ -492,6 +581,7 @@ export class ReceiptAccumulator {
       items: list,
       sum,
       total,
+      totalSource,
       subtotal: ReceiptAccumulator.best(this.subtotals),
       taxOut,
       match,
@@ -531,7 +621,20 @@ export function reconcile(list, total, taxOut) {
   // (3) 見えた回数の少ない品目を1件外すと合う
   c = unique(confirmed.filter((it) => it.hits <= 2 && targets.includes(sum - it.price)));
   if (c) { c.confirmed = false; return { kind: 'drop', id: c.id }; }
-  // (4) 数字1文字の読み違いを直すと合う
+  // 先頭の桁が欠けた金額(¥1,320 → ¥320)を補うと合う候補
+  const lead = [];
+  for (const it of confirmed) {
+    if (it.price <= 0) continue;
+    const unit = 10 ** String(it.price).length;
+    for (const t of targets) {
+      const diff = t - sum;
+      if (diff > 0 && diff % unit === 0 && diff / unit <= 9) lead.push({ it, p: it.price + diff });
+    }
+  }
+  // (4) 金額の直前に区切り記号が残っていた(欠けた疑いのある)品目なら、それを補う
+  c = unique(lead.filter((x) => x.it.lost));
+  if (c) { c.it.price = c.p; c.it.adjusted = true; return { kind: 'lead', id: c.it.id }; }
+  // (5) 数字1文字の読み違いを直すと合う
   const cands = [];
   for (const it of confirmed) {
     const s = String(Math.abs(it.price));
@@ -545,6 +648,9 @@ export function reconcile(list, total, taxOut) {
   }
   c = unique(cands);
   if (c) { c.it.price = c.p; c.it.adjusted = true; return { kind: 'digit', id: c.it.id }; }
+  // (6) 先頭の桁を補える品目が1つだけなら補う
+  c = unique(lead);
+  if (c) { c.it.price = c.p; c.it.adjusted = true; return { kind: 'lead', id: c.it.id }; }
   return null;
 }
 

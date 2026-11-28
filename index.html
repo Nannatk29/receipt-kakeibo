@@ -98,7 +98,7 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 2h6l-1 7h4l-8 13 2-9H8z"/></svg>
     </button>
   </div>
-  <p class="scan-hint" id="scan-hint">枠に入れて、上から下へゆっくり動かしてください</p>
+  <p class="scan-hint" id="scan-hint">金額の右端まで枠に入れて、ゆっくり下へ動かしてください</p>
 
   <div class="loading" id="ocr-loading" hidden>
     <p>文字認識エンジンを準備中…</p>
@@ -299,6 +299,10 @@
           <span>カード番号の下4桁</span>
           <input id="m-last4" type="text" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="任意">
         </label>
+      </div>
+      <div class="field" id="m-keywords-row" hidden>
+        <span>覚えたレシートの表示(この表示があると自動で選びます)</span>
+        <div class="kw-chips" id="m-keywords"></div>
       </div>
       <fieldset class="field">
         <legend>色</legend>

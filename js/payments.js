@@ -1,4 +1,5 @@
 // 支払方法の定義・移行・レシートからの推定・集計。DOM 非依存。
+import { similarity } from './parser.js';
 
 export const PAYMENT_TYPES = [
   { key: 'cash', label: '現金', namePlaceholder: '現金' },
@@ -89,7 +90,13 @@ export function matchMethod(hint, methods) {
   }
   if (hint.service) {
     const key = norm(hint.service);
-    const m = one(active.filter((x) => norm(x.name).includes(key)));
+    // 登録名に含まれる/登録名を含む、または以前に覚えたレシートの表示と似ている(OCR の崩れを許す)
+    const hit = (x) => {
+      const n = norm(x.name);
+      if (n.includes(key) || (n.length >= 3 && key.includes(n))) return true;
+      return (x.keywords || []).some((k) => { const nk = norm(k); return nk === key || similarity(nk, key) >= 0.7; });
+    };
+    const m = one(active.filter(hit));
     if (m) return { id: m.id, reason: `「${hint.service}」の表示` };
   }
   const type = hint.type || (hint.brand ? 'credit' : null);
