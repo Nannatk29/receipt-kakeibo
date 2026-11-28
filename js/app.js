@@ -926,6 +926,19 @@ function clearDemo() {
   toast(n ? `お試しデータ ${n}件を消しました` : 'お試しデータはありません');
 }
 
+// ---- 画面の拡大 -------------------------------------------------------------
+// 3本指のスクリーンショット操作などで画面が拡大されないよう、基本は拡大を止める(設定で許可できる)
+const VIEWPORT_FIXED = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
+const VIEWPORT_ZOOM = 'width=device-width, initial-scale=1, viewport-fit=cover';
+function applyZoomPref() {
+  const allow = !!prefs.data.allowZoom;
+  document.documentElement.classList.toggle('allow-zoom', allow);
+  document.querySelector('meta[name="viewport"]')?.setAttribute('content', allow ? VIEWPORT_ZOOM : VIEWPORT_FIXED);
+  $('allow-zoom').checked = allow;
+}
+// iPhone の Safari は viewport の指定だけでは拡大を止めないため、ジェスチャーも止める
+['gesturestart', 'gesturechange'].forEach((t) => document.addEventListener(t, (e) => { if (!prefs.data.allowZoom) e.preventDefault(); }, { passive: false }));
+
 // ---- その他 -------------------------------------------------------------
 let toastTimer;
 function toast(msg) {
@@ -987,6 +1000,7 @@ function bind() {
   $('m-del-ok').addEventListener('click', deleteMethod);
 
   $('open-settings').addEventListener('click', () => { $('clear-confirm').hidden = true; renderMethodList(); $('settings').showModal(); });
+  $('allow-zoom').addEventListener('change', (e) => { prefs.set('allowZoom', e.target.checked); applyZoomPref(); toast(e.target.checked ? '画面を拡大できるようにしました' : '画面を拡大しないようにしました'); });
   $('export-csv').addEventListener('click', exportCSV);
   $('export-json').addEventListener('click', exportJSON);
   $('import-json').addEventListener('change', (e) => { const f = e.target.files[0]; if (f) importJSON(f); e.target.value = ''; });
@@ -1029,6 +1043,7 @@ window.addEventListener('storage', (e) => {
   store.load();
   methods.load();
   prefs.load();
+  applyZoomPref();
   if (filter && filter.kind === 'method' && !methods.get(filter.value)) filter = null;
   render();
   if ($('methods').open) renderMethodList();
@@ -1038,6 +1053,7 @@ window.addEventListener('storage', (e) => {
 store.load();
 methods.load();
 prefs.load();
+applyZoomPref();
 // 以前の版の記録(支払い名だけを持つ)を、登録済みの支払方法に結び付ける
 if (migrateRecords(store.list, methods.list, newMethodId)) store.save();
 methods.save();

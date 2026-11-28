@@ -43,6 +43,8 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; }
+/* 画面の拡大(ピンチやダブルタップ)を止める。縦横のスクロールとタップはそのまま。設定で許可すると外れる */
+html:not(.allow-zoom) { touch-action: pan-x pan-y; }
 body {
   background: var(--paper);
   color: var(--ink);

@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>レシート家計簿</title>
 <meta name="description" content="レシートにカメラを向けるだけで、品目と金額をその場で読み取って記録する家計簿">
 <meta name="theme-color" content="#f3f5f2" media="(prefers-color-scheme: light)">
@@ -209,6 +209,13 @@
       </button>
     </header>
     <div class="sheet-body settings-body">
+      <section>
+        <h3>表示</h3>
+        <label class="check-row" for="allow-zoom">
+          <input type="checkbox" id="allow-zoom">
+          <span>2本指で画面を拡大できるようにする(オフのときは、3本指のスクリーンショット操作などで画面が拡大されません)</span>
+        </label>
+      </section>
       <section>
         <h3>支払方法</h3>
         <p class="note" id="methods-summary">現金のほか、クレジットカード・電子マネー・QR決済などを登録しておくと、記録のときに選べます。</p>
